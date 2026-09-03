@@ -1,0 +1,16 @@
+[project]
+name = "amide"
+version = "0.0.1"
+description = "A molecular dynamics CLI."
+requires-python = ">=3.11"
+dependencies = ["typer>=0.12"]
+
+[project.scripts]
+amide = "amide.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
