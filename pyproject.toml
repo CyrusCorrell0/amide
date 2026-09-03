@@ -2,6 +2,8 @@
 name = "amide"
 version = "0.0.1"
 description = "A molecular dynamics CLI."
+license = "GPL-3.0-or-later"
+license-files = ["COPYING"]
 requires-python = ">=3.11"
 dependencies = ["typer>=0.12"]
 
