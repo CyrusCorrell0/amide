@@ -17,6 +17,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
       - uses: goreleaser/goreleaser-action@v7.2.3
         with:
           distribution: goreleaser
