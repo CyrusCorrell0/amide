@@ -1,0 +1,4 @@
+# gofmt writes LF; core.autocrlf must not undo that on checkout.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf

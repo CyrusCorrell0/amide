@@ -1,0 +1,7 @@
+# Build artifacts
+/amide-tui
+/amide-tui.exe
+/dist/
+
+# Recordings produced by the viewer
+*_recording_*.gif

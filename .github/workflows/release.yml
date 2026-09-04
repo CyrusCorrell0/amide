@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  tui:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: tui/go.mod
+      - uses: goreleaser/goreleaser-action@v7.2.3
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          workdir: tui
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pypi:
+    needs: [tui]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for PyPI trusted publishing
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+      - name: Check version matches tag
+        run: |
+          version="v$(uv version --short)"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::project version $version does not match tag $GITHUB_REF_NAME; bump pyproject.toml and src/amide/__init__.py"
+            exit 1
+          fi
+      - run: uv build
+      - run: uv publish --trusted-publishing always

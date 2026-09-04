@@ -1,3 +1,5 @@
+import os
+import stat
 import subprocess
 import sys
 import time
@@ -5,6 +7,7 @@ import time
 import pytest
 from typer.testing import CliRunner
 
+import amide
 from amide.cli import app
 
 runner = CliRunner()
@@ -21,7 +24,75 @@ def test_no_args_greets():
 def test_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "amide 0.0.1"
+    assert result.stdout.strip() == f"amide {amide.__version__}"
+
+
+def _output(result):
+    """Click separates stderr in 8.2+ and merges it before; read whatever exists."""
+    text = result.output
+    try:
+        text += result.stderr
+    except ValueError:
+        pass
+    return text
+
+
+def test_view_missing_path_exits_2():
+    result = runner.invoke(app, ["view", "missing.pdb"])
+    assert result.exit_code == 2
+    assert "missing.pdb" in _output(result)
+
+
+def _stub_binary(tmp_path):
+    """A fake TUI that prints the path it was handed."""
+    script = tmp_path / "stub.py"
+    script.write_text("import sys\nprint(sys.argv[1])\n")
+    if sys.platform == "win32":
+        stub = tmp_path / "stub.cmd"
+        stub.write_text(f'@"{sys.executable}" "{script}" %*\n')
+    else:
+        stub = tmp_path / "stub.sh"
+        stub.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return stub
+
+
+@pytest.mark.parametrize("arg", [None, "somedir", "file.pdb"])
+def test_view_passes_absolute_path(tmp_path, arg):
+    (tmp_path / "somedir").mkdir()
+    (tmp_path / "file.pdb").write_text("")
+    expected = (tmp_path if arg is None else tmp_path / arg).resolve()
+
+    env = {**os.environ, "AMIDE_TUI": str(_stub_binary(tmp_path))}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from amide.cli import app; app()",
+            "view",
+            *([] if arg is None else [arg]),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(expected)
+
+
+def test_help_does_not_import_tui():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, amide.cli; sys.exit(1 if 'amide.tui' in sys.modules else 0)",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
 
 
 def _best_of(argv, n=3):
