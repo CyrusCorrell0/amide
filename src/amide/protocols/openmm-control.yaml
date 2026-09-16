@@ -1,0 +1,109 @@
+name: openmm-control
+description: >-
+  A control molecular dynamics run: fetch a structure from RCSB (or take a
+  local file), prepare and solvate it, minimise, run short Langevin dynamics
+  with OpenMM, and check that the backbone stays close to where it started.
+  Change any parameter with --set to run a variant against this control.
+version: 1
+
+params:
+  pdb_id:
+    type: string
+    default: 1AKI
+    description: RCSB id to fetch when no local structure is given.
+  structure:
+    type: path
+    default: null
+    description: A local PDB or mmCIF; when set, the fetch step is skipped.
+  steps:
+    type: integer
+    default: 5000
+    description: Production MD steps.
+  timestep_fs:
+    type: number
+    default: 2.0
+  temperature:
+    type: number
+    default: 300.0
+    description: Kelvin.
+  solvate:
+    type: boolean
+    default: true
+    description: Put the solute in a periodic water box with ions.
+  padding_nm:
+    type: number
+    default: 1.0
+  nonbonded_method:
+    type: string
+    default: auto
+    description: auto picks PME when solvated and NoCutoff otherwise.
+  platform:
+    type: string
+    default: ""
+    description: OpenMM platform; empty lets OpenMM choose the fastest.
+  selection:
+    type: string
+    default: protein and name CA
+    description: Atoms the RMSD and radius of gyration are computed over.
+  rmsd_limit:
+    type: number
+    default: 3.0
+    description: The mean RMSD (angstrom) above which the stability check fails.
+
+steps:
+  - id: fetch
+    tool: rcsb_fetch
+    when: "params.structure is None"
+    with:
+      id: "{{ params.pdb_id }}"
+
+  - id: prepare
+    tool: pdbfixer_prepare
+    with:
+      structure: "{{ params.structure or steps.fetch.path }}"
+      solvate: "{{ params.solvate }}"
+      padding_nm: "{{ params.padding_nm }}"
+
+  - id: minimize
+    tool: openmm_minimize
+    with:
+      structure: "{{ steps.prepare.path }}"
+      nonbonded_method: "{{ params.nonbonded_method }}"
+      platform: "{{ params.platform }}"
+
+  - id: simulate
+    tool: openmm_simulate
+    with:
+      structure: "{{ steps.minimize.path }}"
+      steps: "{{ params.steps }}"
+      timestep_fs: "{{ params.timestep_fs }}"
+      temperature_k: "{{ params.temperature }}"
+      minimize: false
+      nonbonded_method: "{{ params.nonbonded_method }}"
+      platform: "{{ params.platform }}"
+
+  - id: analyze
+    tool: mdanalysis_analyze
+    with:
+      topology: "{{ steps.simulate.topology }}"
+      trajectory: "{{ steps.simulate.trajectory }}"
+      selection: "{{ params.selection }}"
+      metrics: [rmsd, rg]
+
+checks:
+  - id: minimized
+    expr: "steps.minimize.energy_after_kj_mol < steps.minimize.energy_before_kj_mol"
+    description: Minimisation lowered the potential energy.
+  - id: stable
+    expr: "steps.analyze.rmsd_mean < params.rmsd_limit"
+    description: The selected atoms stayed within rmsd_limit of the starting structure.
+
+outputs:
+  prepared: "{{ steps.prepare.path }}"
+  topology: "{{ steps.simulate.topology }}"
+  trajectory: "{{ steps.simulate.trajectory }}"
+  final: "{{ steps.simulate.final }}"
+  time_ps: "{{ steps.simulate.time_ps }}"
+  rmsd_mean: "{{ steps.analyze.rmsd_mean }}"
+  rg_mean: "{{ steps.analyze.rg_mean }}"
+  timeseries: "{{ steps.analyze.timeseries }}"

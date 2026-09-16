@@ -12,3 +12,5 @@ venv/
 htmlcov/
 .env
 .env.*
+.amide/
+*.tar.gz

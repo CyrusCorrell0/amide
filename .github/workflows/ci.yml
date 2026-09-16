@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv sync
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        install: [lite, full]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+      - name: Install (lite)
+        if: matrix.install == 'lite'
+        run: uv sync
+      - name: Install (with simulation and chemistry extras)
+        if: matrix.install == 'full'
+        run: uv sync --extra sim --extra chem
+      - name: Put the entry point on PATH for the startup-budget test
+        run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - run: uv run pytest -q -rs

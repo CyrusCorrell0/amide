@@ -1,20 +1,48 @@
 # amide
 
-amide is a molecular dynamics CLI.
+amide is a molecular dynamics CLI and an experimentation harness: bring your
+own model, bring your own compute, run predefined protocols or open
+experiments with a registry of biomolecular tools. `docs/DESIGN.md` is the
+design reference and milestone plan; read it before changing the harness.
 
 ## Layout
 
-`src/amide/` holds the package, `tests/` the tests, and `cli.py` the one typer app (`app`).
+- `src/amide/cli.py` is the one typer app (`app`); sub-apps `tools`,
+  `protocols`, `runs`, `config` live in the same file.
+- `src/amide/harness/` is the core: `tool.py` (manifests), `registry.py`
+  (discovery), `protocol.py` (YAML schema), `expr.py` (templates and checks),
+  `runs.py` (run directories), `runner.py` (execution), `report.py`.
+- `src/amide/tools/` holds one builtin tool per module; `src/amide/protocols/`
+  the bundled protocol YAML files; `src/amide/config.py` the config file.
+- `tui/` is the Go viewer; `src/amide/tui.py` fetches its binary.
+- `tests/` mirrors the package. `tests/conftest.py` has stub tools and a stub
+  protocol most tests use.
 
 ## Rules
 
-- Lazy-import anything heavy: `cli.py` imports only `typer` and `amide` at module level.
-- Every command has a test.
+- Lazy-import anything heavy: `cli.py` imports only `typer` and `amide` at
+  module level, and every tool module imports its scientific dependencies
+  inside the tool function, never at the top. A test enforces both.
+- Every command has a test. Every builtin tool has a test; tools that need
+  an executable not on PyPI (`lmp`, `gmx`, `w_run`) are tested against stub
+  scripts on PATH, and tools that need `openmm`, `MDAnalysis`, or `rdkit`
+  skip when those are absent.
 - `amide --help` stays under 100ms; CI enforces it.
+- Tools write only under their `ctx.workdir` and return a dict matching
+  their declared outputs. Anything that can fail raises `ToolError` with a
+  message fit to print.
+- Keys never go in protocols, run directories, or the repo. The config file
+  names the environment variable that holds each key.
+- Heavy dependencies are optional extras (`sim`, `chem`, `westpa`, `full`),
+  never base dependencies.
 
 ## Commands
 
-- `uv sync` -- install dependencies.
+- `uv sync` -- install the lite package plus dev tools.
+- `uv sync --extra sim --extra chem` -- also install OpenMM, PDBFixer,
+  MDAnalysis, and RDKit so the simulation tests run instead of skipping.
 - `uv run pytest` -- run tests.
-- `uv run ruff check` -- lint.
+- `uv run ruff check && uv run ruff format --check` -- lint and formatting.
 - `uv tool install . --force` -- reinstall the command locally.
+- `uv run amide run openmm-control --set structure=tests/data/sample.pdb --set solvate=false --set steps=200 --yes`
+  -- a full protocol run in a few seconds, results under `.amide/runs/`.
