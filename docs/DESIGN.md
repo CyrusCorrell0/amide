@@ -103,6 +103,7 @@ are missing fails before it starts, with the install hint.
 ```python
 from amide.harness.tool import Param, tool
 
+
 @tool(
     name="rcsb_fetch",
     description="Download a structure from the RCSB Protein Data Bank.",
