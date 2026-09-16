@@ -22,11 +22,18 @@ dir = ".amide/runs"            # relative paths resolve against the working dire
 paths = []                     # extra directories of *.py and *.yaml tools
 
 [defaults]
-# model = "anthropic/claude-opus-5"
+# model = "anthropic/claude-opus-5"   # used by `amide ask` when --model is omitted
+# max_tokens = 16000
+
+# Providers. These builtins exist without being listed here; list one to
+# change it, or add your own. `amide models list` shows them all.
+#   anthropic  openai  gemini  deepseek  mistral  groq  xai  together
+#   openrouter local (http://localhost:11434/v1, no key)
 
 [providers.anthropic]
 kind = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
+# fallbacks = false             # do not re-run declined requests on a fallback model
 
 [providers.openai]
 kind = "openai"
@@ -42,9 +49,9 @@ kind = "gemini"
 api_key_env = "GEMINI_API_KEY"
 
 [providers.local]
-kind = "openai"
+kind = "openai"                # Ollama, vLLM, anything OpenAI-compatible
 base_url = "http://localhost:11434/v1"
-api_key_env = "OLLAMA_API_KEY"
+api_key_env = ""               # empty: no key is sent or required
 """
 
 _SECRET_KEYS = {"api_key", "token", "secret", "password"}

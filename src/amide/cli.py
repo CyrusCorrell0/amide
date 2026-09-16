@@ -9,10 +9,12 @@ tools_app = typer.Typer(help="The tool registry.")
 protocols_app = typer.Typer(help="Predefined protocols.")
 runs_app = typer.Typer(help="Past and running experiments.")
 config_app = typer.Typer(help="The config file.")
+models_app = typer.Typer(help="Model providers.")
 app.add_typer(tools_app, name="tools")
 app.add_typer(protocols_app, name="protocols")
 app.add_typer(runs_app, name="runs")
 app.add_typer(config_app, name="config")
+app.add_typer(models_app, name="models")
 
 RESUMABLE_EXIT = 3
 
@@ -181,6 +183,190 @@ def _detach(state, root: Path) -> None:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+
+
+# --- ask -------------------------------------------------------------------
+
+
+@app.command()
+def ask(
+    prompt: str = typer.Argument(..., help="What to ask."),
+    model: str = typer.Option(
+        None, "--model", "-m", metavar="PROVIDER/MODEL", help="Default: the config's model."
+    ),
+    system: str = typer.Option(None, "--system", help="A system prompt."),
+    tool: list[str] = typer.Option(
+        [], "--tool", "-t", help="Expose only this tool; repeatable. Default: every runnable tool."
+    ),
+    no_tools: bool = typer.Option(False, "--no-tools", help="Plain chat, no tools."),
+    max_turns: int = typer.Option(10, "--max-turns", help="Model calls before giving up."),
+    max_tokens: int = typer.Option(None, "--max-tokens", help="Output cap per model call."),
+    effort: str = typer.Option(None, "--effort", help="Reasoning effort, if the model has it."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Approve every expensive tool call."),
+    workdir: Path = typer.Option(
+        None, "--workdir", help="Where tools write. Default: .amide/scratch/ask-<time>."
+    ),
+    no_stream: bool = typer.Option(False, "--no-stream", help="Print the reply once, whole."),
+) -> None:
+    """Ask a model once, with the tool registry at its disposal."""
+    import json
+    import sys
+
+    from amide.harness.errors import HarnessError
+    from amide.harness.registry import Registry
+    from amide.harness.tool import ToolContext
+    from amide.models import Message, Request, resolve
+    from amide.models.loop import converse
+
+    config = _config()
+    try:
+        provider, model_id = resolve(model, config)
+        adapter = provider.adapter()
+        registry = Registry.load(config)
+        tools = []
+        if not no_tools:
+            if tool:
+                tools = [registry.get(name).to_schema() for name in tool]
+            else:
+                tools = [spec.to_schema() for spec in registry if not Registry.missing(spec)]
+    except HarnessError as error:
+        typer.echo(f"amide ask: {error}", err=True)
+        raise typer.Exit(2) from None
+
+    if workdir is None:
+        import time
+
+        workdir = Path(".amide/scratch") / f"ask-{time.strftime('%Y%m%d-%H%M%S')}"
+    workdir = workdir.resolve()
+    workdir.mkdir(parents=True, exist_ok=True)
+    log_path = workdir / "log.txt"
+
+    def log(message: str) -> None:
+        from amide.harness.runs import now
+
+        with log_path.open("a") as handle:
+            handle.write(f"{now()} {message}\n")
+
+    ctx = ToolContext(workdir=workdir, run_dir=workdir, log=log)
+    request = Request(
+        model=model_id,
+        messages=[Message.user(prompt)],
+        system=system,
+        tools=tools,
+        max_tokens=max_tokens or int(config.defaults.get("max_tokens") or 16000),
+        effort=effort,
+    )
+
+    def on_text(piece: str) -> None:
+        sys.stdout.write(piece)
+        sys.stdout.flush()
+
+    def on_call(call, result: str, ok: bool) -> None:
+        args = ", ".join(f"{k}={v!r}" for k, v in call.arguments.items())
+        verdict = "ok" if ok else "error"
+        typer.echo(f"-> {call.name}({args}): {verdict} {result[:200]}", err=True)
+
+    def approve(spec, args) -> bool:
+        if not sys.stdin.isatty():
+            return False
+        return typer.confirm(f"{spec.name} is expensive. Run it?", err=True)
+
+    try:
+        outcome = converse(
+            adapter,
+            request,
+            registry,
+            ctx,
+            yes=yes,
+            approve=approve,
+            on_text=on_text,
+            on_call=on_call,
+            max_turns=max_turns,
+            stream=not no_stream,
+        )
+    except HarnessError as error:
+        typer.echo(f"\namide ask: {error}", err=True)
+        raise typer.Exit(1) from None
+    if outcome.reply.text and not outcome.reply.text.endswith("\n"):
+        sys.stdout.write("\n")
+    (workdir / "transcript.json").write_text(
+        json.dumps([_message_dict(m) for m in request.messages], indent=2, default=str)
+    )
+    usage = outcome.usage
+    summary = (
+        f"[{provider.name}/{outcome.reply.model or model_id}: {usage.input_tokens} in, "
+        f"{usage.output_tokens} out, {len(outcome.calls)} tool call(s), "
+        f"{outcome.turns} turn(s)]"
+    )
+    if outcome.calls:
+        summary += f" files: {workdir}"
+    typer.echo(summary, err=True)
+    if outcome.stop == "end":
+        raise typer.Exit()
+    reasons = {
+        "refusal": f"the model declined: {outcome.reply.detail}",
+        "length": "the reply hit the max_tokens cap",
+        "max_turns": f"stopped after {max_turns} turns; raise --max-turns",
+    }
+    typer.echo(f"amide ask: {reasons.get(outcome.stop, outcome.stop)}", err=True)
+    raise typer.Exit(1)
+
+
+def _message_dict(message) -> dict:
+    entry = {"role": message.role, "content": message.content}
+    if message.tool_calls:
+        entry["tool_calls"] = [
+            {"id": c.id, "name": c.name, "arguments": c.arguments} for c in message.tool_calls
+        ]
+    if message.tool_call_id:
+        entry["tool_call_id"] = message.tool_call_id
+        entry["name"] = message.name
+        entry["is_error"] = message.is_error
+    return entry
+
+
+# --- models ----------------------------------------------------------------
+
+
+@models_app.command("list")
+def models_list(
+    remote: bool = typer.Option(
+        False, "--remote", help="Also ask each provider that has a key which models it serves."
+    ),
+    provider: str = typer.Option(None, "--provider", "-p", help="Only this provider."),
+) -> None:
+    """List providers, whether their key is set, and (with --remote) their models."""
+    from amide.harness.errors import HarnessError
+    from amide.models import providers
+
+    config = _config()
+    try:
+        known = providers(config)
+    except HarnessError as error:
+        typer.echo(f"amide models list: {error}", err=True)
+        raise typer.Exit(2) from None
+    if provider and provider not in known:
+        typer.echo(f"amide models list: unknown provider {provider!r}", err=True)
+        raise typer.Exit(2)
+    default = config.defaults.get("model")
+    if default:
+        typer.echo(f"default: {default}")
+    failed = 0
+    for name in sorted(known):
+        if provider and name != provider:
+            continue
+        entry = known[name]
+        typer.echo(f"{name:<12} {entry.kind:<10} {entry.base_url:<48} {entry.key_status}")
+        if not remote or not entry.usable:
+            continue
+        try:
+            for model_id in entry.adapter().list_models():
+                typer.echo(f"    {name}/{model_id}")
+        except HarnessError as error:
+            failed += 1
+            typer.echo(f"    {error}", err=True)
+    if failed:
+        raise typer.Exit(1)
 
 
 # --- tools -----------------------------------------------------------------

@@ -44,7 +44,14 @@ src/amide/
     report.py       report.md and results.json
   tools/            builtin tools, one module each
   protocols/        bundled protocol YAML files
-  models/           provider adapters (milestone 3)
+  models/
+    base.py         Message, Request, Reply, ToolCall, the Adapter interface
+    http.py         urllib with retries and SSE parsing; tests fake it
+    openai.py       OpenAI-compatible chat completions
+    anthropic.py    Anthropic Messages API
+    gemini.py       Gemini native API
+    providers.py    builtin providers, config overlay, provider/model resolution
+    loop.py         the tool-calling loop behind `amide ask`
   agents/           agent roles and the orchestrator (milestone 4)
 tui/                the Go viewer (existing)
 docs/DESIGN.md      this file
@@ -333,9 +340,10 @@ api_key_env = "OLLAMA_API_KEY"
 `amide config init` writes this template. `amide config show` prints
 the effective config with keys redacted.
 
-## Models (milestone 3)
+## Models
 
-Three hand-written adapters over plain HTTP, no vendor SDKs:
+Three hand-written adapters over plain HTTP (`urllib`), no vendor SDKs,
+in `src/amide/models/`:
 
 | kind        | covers                                                          |
 |-------------|-----------------------------------------------------------------|
@@ -343,10 +351,42 @@ Three hand-written adapters over plain HTTP, no vendor SDKs:
 | `anthropic` | Anthropic Messages API                                          |
 | `gemini`    | Google Gemini native API                                        |
 
-All three normalise to one internal shape: a list of messages, a list of
-tool definitions generated from tool manifests, streaming text deltas,
-and tool-call events. A model is named `provider/model-id`; the provider
-half selects the config entry, which selects the adapter.
+All three speak one internal shape (`models/base.py`): a `Request` of
+`Message`s plus tool definitions taken straight from `ToolSpec.to_schema`,
+and a `Reply` with text, tool calls, a normalised stop reason (`end`,
+`tool_calls`, `length`, `refusal`, `other`), and token usage. Each adapter
+has `complete`, `stream` (text deltas to a callback), and `list_models`.
+An assistant turn keeps the provider's raw content and replays it
+verbatim, so reasoning blocks and signatures survive the round trip.
+
+A model is named `provider/model-id`. Providers come from a builtin set
+(`anthropic`, `openai`, `gemini`, `deepseek`, `mistral`, `groq`, `xai`,
+`together`, `openrouter`, `local`) with `[providers.*]` in the config
+layered on top; a config entry can change a builtin or add a new one.
+`api_key_env` names the environment variable; empty means no key. Extra
+keys in a provider table are adapter options: `headers`, the OpenAI
+`max_tokens_param`, the Anthropic `fallbacks`.
+
+Provider details that matter:
+
+- Anthropic: thinking is left to the model's default (the parameter is
+  omitted); `--effort` maps to `output_config.effort`; `fallbacks =
+  "default"` is sent unless the provider sets `fallbacks = false`, so a
+  request a safety classifier declines is re-run on a fallback model
+  rather than stopping. Refusals surface as stop `refusal` with the
+  category and explanation.
+- OpenAI-compatible: `max_completion_tokens` against `api.openai.com`,
+  `max_tokens` elsewhere; `--effort` maps to `reasoning_effort`; streaming
+  asks for usage in the final chunk.
+- Gemini: tool schemas lose `default` and arrays gain `items`; function
+  calls get synthetic ids; consecutive tool results share one turn.
+
+`models/loop.py` is the tool-calling loop: call the model, run every tool
+it asks for through the registry (validation, requirement checks,
+expensive-tool approval, errors all become tool results the model sees),
+append the results, repeat until it stops or `max_turns` is spent.
+`amide ask` is that loop once, from the command line, with a transcript
+and tool outputs left under `.amide/scratch/ask-<time>/`.
 
 ## Agents (milestone 4)
 
@@ -387,9 +427,9 @@ results back, with the same manifest and the same run layout.
 |----|-----------------------|----------------------------------------------------------------------------|---------|
 | 0  | CLI registration      | `amide` on PyPI                                                            | done    |
 | 1  | viewer                | `amide view`                                                               | done    |
-| 2  | protocols             | tool registry, 14 builtin tools, protocol runner, runs, resume, detach, export, `openmm-control` bundled | this branch |
-| 3  | models                | three adapters, `amide models list`, `amide ask` for a one-shot tool-using call | next    |
-| 4  | agents                | roles, orchestrator, interactive session, abstract/methodology/results     |         |
+| 2  | protocols             | tool registry, 14 builtin tools, protocol runner, runs, resume, detach, export, `openmm-control` bundled | done    |
+| 3  | models                | three adapters, `amide models list`, `amide ask` for a one-shot tool-using call | this branch |
+| 4  | agents                | roles, orchestrator, interactive session, abstract/methodology/results     | next    |
 | 5  | remote runner         | run steps through a user-supplied CLI                                      |         |
 | 6  | tool publishing       | a shared index and `amide tools publish`                                   |         |
 

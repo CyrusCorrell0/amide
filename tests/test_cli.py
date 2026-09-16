@@ -98,7 +98,7 @@ def test_help_does_not_import_tui_or_harness():
             "-c",
             "import sys, amide.cli; "
             "heavy = [m for m in sys.modules if m.startswith(('amide.tui', 'amide.harness', "
-            "'amide.tools', 'amide.config', 'yaml'))]; "
+            "'amide.tools', 'amide.config', 'amide.models', 'yaml'))]; "
             "print(heavy); sys.exit(1 if heavy else 0)",
         ],
         capture_output=True,
@@ -346,6 +346,187 @@ def test_config_tool_paths_are_loaded(project: Path, tmp_path: Path):
     (project / "config.toml").write_text(f'[tools]\npaths = ["{extra}"]\n')
     result = runner.invoke(app, ["tools", "list"])
     assert "from_config" in result.stdout
+
+
+# --- models and ask --------------------------------------------------------
+
+
+def test_models_list(project: Path, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    (project / "config.toml").write_text(
+        '[defaults]\nmodel = "deepseek/deepseek-chat"\n'
+        '[providers.mine]\nkind = "openai"\nbase_url = "http://box/v1"\napi_key_env = ""\n'
+    )
+    result = runner.invoke(app, ["models", "list"])
+    assert result.exit_code == 0, _output(result)
+    lines = result.stdout.splitlines()
+    assert lines[0] == "default: deepseek/deepseek-chat"
+    assert any(line.startswith("openai ") and "OPENAI_API_KEY not set" in line for line in lines)
+    assert any(line.startswith("deepseek ") and "DEEPSEEK_API_KEY set" in line for line in lines)
+    assert any(line.startswith("mine ") and "no key needed" in line for line in lines)
+    assert not any(line.startswith("    ") for line in lines)
+
+    from amide.models import http
+
+    seen = []
+
+    def get_json(url, headers, timeout=None):
+        seen.append(url)
+        if "deepseek" in url:
+            return {"data": [{"id": "deepseek-chat"}]}
+        raise http.ModelError("http://box/v1/models returned 500: down", 500)
+
+    monkeypatch.setattr(http, "get_json", get_json)
+    result = runner.invoke(app, ["models", "list", "--remote"])
+    assert result.exit_code == 1
+    assert "    deepseek/deepseek-chat" in result.stdout
+    assert "returned 500: down" in _output(result)
+    assert sorted(seen) == [
+        "http://box/v1/models",
+        "http://localhost:11434/v1/models",
+        "https://api.deepseek.com/models",
+    ]
+
+    result = runner.invoke(app, ["models", "list", "--remote", "--provider", "deepseek"])
+    assert result.exit_code == 0, _output(result)
+    assert "mine" not in result.stdout
+    assert runner.invoke(app, ["models", "list", "--provider", "zzz"]).exit_code == 2
+
+
+class _ScriptedAdapter:
+    def __init__(self, replies):
+        self.replies = replies  # shared with the test, which appends as it goes
+        self.requests = []
+
+    def complete(self, request):
+        self.requests.append(
+            {"messages": list(request.messages), "tools": [t["name"] for t in request.tools]}
+        )
+        return self.replies.pop(0)
+
+    def stream(self, request, on_text):
+        reply = self.complete(request)
+        on_text(reply.text)
+        return reply
+
+    def list_models(self):
+        return []
+
+
+@pytest.fixture
+def scripted(monkeypatch):
+    """Route `amide ask` to a scripted adapter; returns the list to fill with replies."""
+    from amide.models.providers import Provider
+
+    replies = []
+    adapters = []
+
+    def adapter(self):
+        adapters.append(_ScriptedAdapter(replies))
+        return adapters[-1]
+
+    monkeypatch.setattr(Provider, "adapter", adapter)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    return replies, adapters
+
+
+def test_ask_runs_tools_and_writes_transcript(project: Path, scripted):
+    from amide.models import Reply, ToolCall, Usage
+
+    replies, adapters = scripted
+    replies.extend(
+        [
+            Reply(
+                text="Adding.",
+                tool_calls=[ToolCall("c1", "add", {"a": 2, "b": 3})],
+                stop="tool_calls",
+                usage=Usage(10, 2),
+            ),
+            Reply(text="The sum is 5.", stop="end", usage=Usage(12, 3), model="gpt-x"),
+        ]
+    )
+    result = runner.invoke(
+        app,
+        ["ask", "add 2 and 3", "-m", "openai/gpt-x", "--workdir", "scratch", "--system", "terse"],
+    )
+    assert result.exit_code == 0, _output(result)
+    assert "Adding.The sum is 5." in result.stdout
+    err = _output(result)
+    assert '-> add(a=2, b=3): ok {"sum": 5}' in err
+    assert "[openai/gpt-x: 22 in, 5 out, 1 tool call(s), 2 turn(s)]" in err
+    transcript = json.loads((project / "scratch" / "transcript.json").read_text())
+    assert [m["role"] for m in transcript] == ["user", "assistant", "tool", "assistant"]
+    assert transcript[2] == {
+        "role": "tool",
+        "content": '{"sum": 5}',
+        "tool_call_id": "c1",
+        "name": "add",
+        "is_error": False,
+    }
+    assert (project / "scratch" / "log.txt").exists()
+    (adapter,) = adapters
+    assert "add" in adapter.requests[0]["tools"] and "rcsb_fetch" in adapter.requests[0]["tools"]
+
+
+def test_ask_tool_selection_and_default_model(project: Path, scripted):
+    from amide.models import Reply
+
+    replies, adapters = scripted
+    (project / "config.toml").write_text('[defaults]\nmodel = "openai/gpt-x"\nmax_tokens = 50\n')
+    replies.append(Reply(text="hi", stop="end"))
+    result = runner.invoke(app, ["ask", "hello", "--tool", "add", "--tool", "write", "--no-stream"])
+    assert result.exit_code == 0, _output(result)
+    assert adapters[0].requests[0]["tools"] == ["add", "write"]
+    replies.append(Reply(text="hi", stop="end"))
+    result = runner.invoke(app, ["ask", "hello", "--no-tools"])
+    assert result.exit_code == 0, _output(result)
+    assert adapters[1].requests[0]["tools"] == []
+    scratch = list((project / ".amide" / "scratch").iterdir())
+    assert len(scratch) >= 1 and scratch[0].name.startswith("ask-")
+
+
+def test_ask_reports_bad_model_and_missing_key(project: Path, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    result = runner.invoke(app, ["ask", "hello"])
+    assert result.exit_code == 2
+    assert "no model given" in _output(result)
+    result = runner.invoke(app, ["ask", "hello", "-m", "openai/gpt-x"])
+    assert result.exit_code == 2
+    assert "needs the OPENAI_API_KEY" in _output(result)
+    result = runner.invoke(app, ["ask", "hello", "-m", "openai/gpt-x", "--tool", "nope"])
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    result = runner.invoke(app, ["ask", "hello", "-m", "openai/gpt-x", "--tool", "nope"])
+    assert result.exit_code == 2 and "nope" in _output(result)
+
+
+def test_ask_non_end_stops_exit_1(project: Path, scripted, monkeypatch):
+    from amide.models import ModelError, Reply, ToolCall
+
+    replies, _ = scripted
+    replies.append(Reply(text="", stop="refusal", detail="bio; declined"))
+    result = runner.invoke(app, ["ask", "x", "-m", "openai/gpt-x"])
+    assert result.exit_code == 1 and "the model declined: bio; declined" in _output(result)
+
+    replies.extend([Reply(tool_calls=[ToolCall("1", "pricey", {})], stop="tool_calls")] * 2)
+    result = runner.invoke(app, ["ask", "x", "-m", "openai/gpt-x", "--max-turns", "2"])
+    assert result.exit_code == 1 and "stopped after 2 turns" in _output(result)
+    assert "-> pricey(): error pricey is expensive" in _output(result)
+
+    replies.append(Reply(tool_calls=[ToolCall("1", "pricey", {})], stop="tool_calls"))
+    replies.append(Reply(text="ran", stop="end"))
+    result = runner.invoke(app, ["ask", "x", "-m", "openai/gpt-x", "--yes"])
+    assert result.exit_code == 0 and "-> pricey(): ok" in _output(result)
+
+    class Failing(_ScriptedAdapter):
+        def stream(self, request, on_text):
+            raise ModelError("https://x returned 401: bad key", 401)
+
+    from amide.models.providers import Provider
+
+    monkeypatch.setattr(Provider, "adapter", lambda self: Failing([]))
+    result = runner.invoke(app, ["ask", "x", "-m", "openai/gpt-x"])
+    assert result.exit_code == 1 and "401: bad key" in _output(result)
 
 
 def test_stub_protocol_matches_conftest():
