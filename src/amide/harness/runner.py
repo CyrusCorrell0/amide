@@ -19,9 +19,10 @@ from amide.harness.errors import (
 from amide.harness.expr import evaluate, render
 from amide.harness.protocol import Protocol, Step
 from amide.harness.registry import Registry
+from amide.harness.remote import Runner
 from amide.harness.report import write_results
 from amide.harness.runs import RunState, now
-from amide.harness.tool import ToolContext, ToolSpec
+from amide.harness.tool import COSTS, ToolContext, ToolSpec
 
 Approver = Callable[[Step, ToolSpec, dict[str, Any]], bool]
 Reporter = Callable[[str], None]
@@ -34,6 +35,24 @@ class RunOptions:
     max_seconds: float | None = None
     env: dict[str, str] = field(default_factory=dict)
     echo: Reporter = lambda message: None
+    # Where steps execute: ``runners`` by name (``local`` is always there);
+    # ``runner`` is the default for steps costing at least ``remote_cost``.
+    runners: dict[str, Runner] = field(default_factory=lambda: {"local": Runner()})
+    runner: str | None = None
+    remote_cost: str = "moderate"
+
+    def runner_for(self, step: Step, spec: ToolSpec) -> Runner:
+        name = step.runner
+        if name is None:
+            remote = self.runner and COSTS.index(spec.cost) >= COSTS.index(self.remote_cost)
+            name = self.runner if remote else "local"
+        try:
+            return self.runners[name]
+        except KeyError:
+            raise HarnessError(
+                f"step {step.id}: no runner named {name!r}; configured: "
+                f"{', '.join(sorted(self.runners))}"
+            ) from None
 
 
 def execute(
@@ -128,14 +147,17 @@ def _run_step(
         env=options.env,
         timeout=spec.timeout,
     )
+    runner = options.runner_for(step, spec)
+    step_state.runner = runner.name
     step_state.status = "running"
     step_state.started = now()
     step_state.error = None
     state.save()
-    _say(state, options, f"  {step.id}: {spec.name} ...")
+    where = "" if runner.name == "local" else f" on {runner.name}"
+    _say(state, options, f"  {step.id}: {spec.name}{where} ...")
     clock = time.monotonic()
     try:
-        outputs = spec.run(ctx, args)
+        outputs = runner.run_step(spec, ctx, args)
     except HarnessError as error:
         _fail_step(state, step_state, clock, str(error))
         raise

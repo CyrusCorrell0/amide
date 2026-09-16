@@ -395,3 +395,22 @@ def test_describe_tools_and_protocols(project: Path, stub_registry):
     assert [p["name"] for p in listing] == ["arith", "openmm-control"]
     assert listing[0]["params"]["a"]["default"] == 2
     assert "steps:" in _describe_protocol("arith")["text"]
+
+
+def test_run_protocol_uses_the_session_runner(project: Path, experiment, script, tmp_path: Path):
+    (project / "config.toml").write_text(
+        f'[tools]\npaths = ["{project / ".amide" / "tools"}"]\n'
+        "[runners.fake]\n"
+        'copy_to = "cp -r {src} {dst}"\ncopy_from = "cp -r {src} {dst}"\nexec = "sh -c {command}"\n'
+        f'python = "{__import__("sys").executable}"\nroot = "{tmp_path / "remote"}"\n'
+    )
+    script.replies = [
+        _tool_turn(_call("run_protocol", protocol=ARITH_YAML)),
+        _tool_turn(FINISH),
+        _end("done"),
+    ]
+    state = _session(experiment, project, runner="fake", remote_cost="cheap").run()
+    assert state.status == "done", state.error
+    (run_dir,) = (state.dir / "runs").iterdir()
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["status"] == "passed" and run["steps"]["twice"]["runner"] == "fake"

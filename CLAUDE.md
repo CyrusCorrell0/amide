@@ -11,7 +11,10 @@ design reference and milestone plan; read it before changing the harness.
   `protocols`, `runs`, `config`, `models` live in the same file.
 - `src/amide/harness/` is the core: `tool.py` (manifests), `registry.py`
   (discovery), `protocol.py` (YAML schema), `expr.py` (templates and checks),
-  `runs.py` (run directories), `runner.py` (execution), `report.py`.
+  `runs.py` (run directories), `runner.py` (execution), `remote.py` (where a
+  step executes: locally, or through a `[runners.*]` command template that
+  copies the run over, runs `amide tools run` there, and copies the step
+  back), `report.py`.
 - `src/amide/tools/` holds one builtin tool per module; `src/amide/protocols/`
   the bundled protocol YAML files; `src/amide/config.py` the config file.
 - `src/amide/models/` is bring-your-own-model: `base.py` (the one message

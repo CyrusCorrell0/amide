@@ -41,6 +41,7 @@ src/amide/
     expr.py         the {{ }} template language and check expressions
     runs.py         run directories: create, checkpoint, list, export
     runner.py       executes a protocol step by step
+    remote.py       runners: local, and command runners over the user's own CLI
     report.py       report.md and results.json
   tools/            builtin tools, one module each
   protocols/        bundled protocol YAML files
@@ -444,10 +445,36 @@ binary stays the structure viewer.
 
 ## Runners
 
-The runner interface is "execute this step here". The local runner is
-the only implementation today. A remote runner (milestone 5) will shell
-out to the user's own CLI to copy the step's workdir, execute, and copy
-results back, with the same manifest and the same run layout.
+The runner interface is "execute this step here" (`harness/remote.py`):
+`Runner.run_step(spec, ctx, args)`. The local runner calls the tool. A
+`CommandRunner` comes from a `[runners.<name>]` table in the config and
+shells out to a CLI the user already has; amide manages no cloud.
+
+```toml
+[runners.gpu]
+host = "my-gpu-box"
+copy_to = "rsync -a {src}/ {host}:{dst}/"
+copy_from = "rsync -a {host}:{src}/ {dst}/"
+exec = "ssh {host} {command}"
+python = "python3"      # remote interpreter with amide installed
+root = "/tmp/amide"     # remote directory that holds copied runs
+```
+
+Per step it clears and recreates `<root>/<run-id>` on the remote, copies
+the whole run directory over, runs `amide tools run <tool> --inputs
+steps/<id>/inputs.json --workdir steps/<id>` there (a command anyone can
+also use by hand), and copies the step directory back. Paths in the
+inputs that point into the local run directory are rewritten to the
+remote copy and back, so tools see ordinary paths on both sides, and the
+run layout is identical whichever machine ran a step; `run.json` records
+the runner per step.
+
+`amide run --runner gpu` sends every step whose cost is at least
+`--remote-cost` (default `moderate`, so fetches stay local); a step can
+pin `runner: local` or `runner: gpu` in the protocol. `amide experiment
+--runner gpu` does the same for the protocols agents run. The remote
+machine needs amide and the tool's requirements installed, and any local
+tools the protocol uses reachable through its own config.
 
 ## Milestones
 
@@ -457,9 +484,9 @@ results back, with the same manifest and the same run layout.
 | 1  | viewer                | `amide view`                                                               | done    |
 | 2  | protocols             | tool registry, 14 builtin tools, protocol runner, runs, resume, detach, export, `openmm-control` bundled | done    |
 | 3  | models                | three adapters, `amide models list`, `amide ask` for a one-shot tool-using call | done    |
-| 4  | agents                | roles, orchestrator, interactive session, abstract/methodology/results     | this branch |
-| 5  | remote runner         | run steps through a user-supplied CLI                                      | next    |
-| 6  | tool publishing       | a shared index and `amide tools publish`                                   |         |
+| 4  | agents                | roles, orchestrator, interactive session, abstract/methodology/results     | done    |
+| 5  | remote runner         | run steps through a user-supplied CLI                                      | this branch |
+| 6  | tool publishing       | a shared index and `amide tools publish`                                   | later   |
 
 ## Licensing
 

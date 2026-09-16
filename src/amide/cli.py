@@ -93,6 +93,12 @@ def run(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Validate and print the resolved parameters; run nothing."
     ),
+    runner: str = typer.Option(
+        None, "--runner", help="A [runners.*] name: execute steps there instead of here."
+    ),
+    remote_cost: str = typer.Option(
+        "moderate", "--remote-cost", help="With --runner: send steps of at least this cost."
+    ),
 ) -> None:
     """Run a protocol."""
     import sys
@@ -100,8 +106,14 @@ def run(
     from amide.harness.errors import HarnessError
     from amide.harness.protocol import find, load, parse_overrides
     from amide.harness.registry import Registry
+    from amide.harness.remote import runners_from_config
     from amide.harness.runner import RunOptions, execute
     from amide.harness.runs import RunStore
+    from amide.harness.tool import COSTS
+
+    if remote_cost not in COSTS:
+        typer.echo(f"amide run: --remote-cost must be one of {', '.join(COSTS)}", err=True)
+        raise typer.Exit(2)
 
     if (protocol is None) == (resume is None):
         typer.echo("amide run: give a protocol, or --resume RUN", err=True)
@@ -110,6 +122,11 @@ def run(
         config = _config()
         store = RunStore(runs_dir or config.runs_dir)
         registry = Registry.load(config)
+        runners = runners_from_config(config)
+        if runner is not None and runner not in runners:
+            raise HarnessError(
+                f"no runner named {runner!r}; add [runners.{runner}] to {config.path}"
+            )
         if resume is not None:
             state = store.get(resume)
             spec = load(state.protocol_path)
@@ -136,7 +153,7 @@ def run(
         raise typer.Exit(2) from None
 
     if detach:
-        _detach(state, store.root)
+        _detach(state, store.root, runner, remote_cost)
         typer.echo(state.id)
         raise typer.Exit()
 
@@ -150,6 +167,9 @@ def run(
         approve=approve,
         max_seconds=max_seconds,
         echo=typer.echo,
+        runners=runners,
+        runner=runner,
+        remote_cost=remote_cost,
     )
     state = execute(state, spec, registry, options)
     typer.echo(f"results: {state.dir / 'report.md'}")
@@ -160,7 +180,7 @@ def run(
     raise typer.Exit(1)
 
 
-def _detach(state, root: Path) -> None:
+def _detach(state, root: Path, runner: str | None = None, remote_cost: str = "moderate") -> None:
     import subprocess
     import sys
 
@@ -174,7 +194,11 @@ def _detach(state, root: Path) -> None:
         "--yes",
         "--runs-dir",
         str(root),
+        "--remote-cost",
+        remote_cost,
     ]
+    if runner:
+        argv += ["--runner", runner]
     with state.log_path.open("a") as log:
         subprocess.Popen(
             argv,
@@ -349,6 +373,12 @@ def experiment(
     max_turns: int = typer.Option(40, "--max-turns", help="Model calls per agent."),
     runs_dir: Path = typer.Option(None, "--runs-dir", help="Where experiments are kept."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Hide sub-agent activity."),
+    runner: str = typer.Option(
+        None, "--runner", help="A [runners.*] name: protocol steps execute there."
+    ),
+    remote_cost: str = typer.Option(
+        "moderate", "--remote-cost", help="With --runner: send steps of at least this cost."
+    ),
 ) -> None:
     """Run an open experiment: an orchestrator and its sub-agents answer a question."""
     import sys
@@ -367,6 +397,10 @@ def experiment(
     try:
         store = RunStore(runs_dir or config.runs_dir)
         registry = Registry.load(config)
+        if runner is not None and runner not in config.runners:
+            raise HarnessError(
+                f"no runner named {runner!r}; add [runners.{runner}] to {config.path}"
+            )
         if resume is not None:
             state = store.get_any(resume)
             if not isinstance(state, Experiment):
@@ -435,6 +469,8 @@ def experiment(
         on_event=on_event,
         ask_user=ask_user if interactive else None,
         max_turns=max_turns,
+        runner=runner,
+        remote_cost=remote_cost,
     )
     state = session.run(question if resume is not None else None)
     sys.stdout.write("\n")
@@ -532,6 +568,75 @@ def tools_show(name: str = typer.Argument(..., help="A tool name.")) -> None:
         typer.echo(f"amide tools show: {error}", err=True)
         raise typer.Exit(2) from None
     typer.echo(json.dumps(spec.to_dict(), indent=2))
+
+
+@tools_app.command("run")
+def tools_run(
+    name: str = typer.Argument(..., help="A tool name."),
+    inputs: Path = typer.Option(None, "--inputs", help="A JSON file of inputs."),
+    set_: list[str] = typer.Option(
+        [], "--set", "-s", metavar="NAME=VALUE", help="An input; repeatable."
+    ),
+    workdir: Path = typer.Option(
+        None, "--workdir", help="Where the tool writes. Default: the current directory."
+    ),
+    run_dir: Path = typer.Option(None, "--run-dir", help="The run directory; default: workdir."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Print only the outputs JSON."),
+) -> None:
+    """Run one tool by itself; outputs go to stdout and to outputs.json in the workdir."""
+    import json
+
+    from amide.harness.errors import HarnessError
+    from amide.harness.protocol import parse_overrides
+    from amide.harness.registry import Registry
+    from amide.harness.tool import ToolContext
+
+    registry = _registry()
+    try:
+        spec = registry.get(name)
+        given = {}
+        if inputs is not None:
+            try:
+                given = json.loads(inputs.read_text())
+            except (OSError, json.JSONDecodeError) as error:
+                raise HarnessError(f"cannot read inputs {inputs}: {error}") from None
+            if not isinstance(given, dict):
+                raise HarnessError(f"{inputs} must hold a JSON object")
+        given.update(parse_overrides(set_))
+        args = spec.validate_inputs(given)
+        missing = Registry.missing(spec)
+        if missing:
+            raise HarnessError(f"{name} needs {', '.join(missing)}. {spec.requires.hint}".strip())
+    except HarnessError as error:
+        typer.echo(f"amide tools run: {error}", err=True)
+        raise typer.Exit(2) from None
+    workdir = (workdir or Path.cwd()).resolve()
+    workdir.mkdir(parents=True, exist_ok=True)
+    log_path = workdir / "log.txt"
+
+    def log(message: str) -> None:
+        with log_path.open("a") as handle:
+            handle.write(f"{message}\n")
+        if not quiet:
+            typer.echo(message, err=True)
+
+    ctx = ToolContext(
+        workdir=workdir, run_dir=(run_dir or workdir).resolve(), log=log, timeout=spec.timeout
+    )
+    try:
+        outputs = spec.run(ctx, args)
+    except HarnessError as error:
+        typer.echo(f"amide tools run: {error}", err=True)
+        raise typer.Exit(1) from None
+    except Exception as error:  # a tool bug is still a failed run, reported not dumped
+        import traceback
+
+        log(traceback.format_exc())
+        typer.echo(f"amide tools run: {name} crashed: {type(error).__name__}: {error}", err=True)
+        raise typer.Exit(1) from None
+    text = json.dumps(outputs, indent=2, default=str)
+    (workdir / "outputs.json").write_text(text)
+    typer.echo(text)
 
 
 @tools_app.command("check")

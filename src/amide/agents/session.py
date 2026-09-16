@@ -217,10 +217,14 @@ class Session:
         ask_user: Callable[[], str | None] | None = None,
         max_turns: int = 40,
         stream: bool = True,
+        runner: str | None = None,
+        remote_cost: str = "moderate",
     ) -> None:
         self.experiment = experiment
         self.registry = registry
         self.config = config
+        self.runner = runner
+        self.remote_cost = remote_cost
         self.model = model or experiment.model
         self.yes = yes
         self.approve = approve
@@ -678,10 +682,15 @@ class Session:
         def approve(step, tool, args) -> bool:
             return self.approve is not None and self.approve(tool, args)
 
+        from amide.harness.remote import runners_from_config
+
         options = RunOptions(
             yes=self.yes,
             approve=approve,
             echo=lambda message: self.on_event("run", record_ref, message),
+            runners=runners_from_config(self.config),
+            runner=self.runner,
+            remote_cost=self.remote_cost,
         )
         state = execute(state, spec, self.registry, options)
         return {

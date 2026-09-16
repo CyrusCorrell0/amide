@@ -37,6 +37,7 @@ class StepState:
     seconds: float | None = None
     outputs: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    runner: str = "local"
 
 
 @dataclass
@@ -233,6 +234,7 @@ def _protocol_dict(protocol: Protocol) -> dict[str, Any]:
                 "tool": step.tool,
                 **({"when": step.when} if step.when else {}),
                 **({"with": step.with_} if step.with_ else {}),
+                **({"runner": step.runner} if step.runner else {}),
             }
             for step in protocol.steps
         ],

@@ -21,6 +21,7 @@ class Step:
     with_: dict[str, Any] = field(default_factory=dict)
     when: str | None = None
     description: str = ""
+    runner: str | None = None  # a [runners.*] name, or "local"; None follows the run's choice
 
 
 @dataclass
@@ -250,12 +251,16 @@ def _step(entry: Any, index: int, where: str) -> Step:
     when = entry.get("when")
     if when is not None and not isinstance(when, str):
         raise ProtocolError(f"{where}: step {step_id!r}: when must be an expression string")
+    runner = entry.get("runner")
+    if runner is not None and (not isinstance(runner, str) or not runner):
+        raise ProtocolError(f"{where}: step {step_id!r}: runner must be a name")
     return Step(
         id=step_id,
         tool=tool,
         with_=with_,
         when=when,
         description=str(entry.get("description", "")),
+        runner=runner,
     )
 
 

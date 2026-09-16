@@ -65,6 +65,19 @@ api_key_env = "GEMINI_API_KEY"
 kind = "openai"                # Ollama, vLLM, anything OpenAI-compatible
 base_url = "http://localhost:11434/v1"
 api_key_env = ""               # empty: no key is sent or required
+
+# Runners execute protocol steps on another machine through a CLI you already
+# use (ssh, brev, a cluster wrapper). amide copies the run directory over, runs
+# `amide tools run` there, and copies the step directory back. Templates get
+# {src}, {dst}, {host}, and {command} (already shell-quoted). Select one with
+# `amide run --runner gpu`; steps cheaper than --remote-cost stay local.
+[runners.gpu]
+# host = "my-gpu-box"
+# copy_to = "rsync -a {src}/ {host}:{dst}/"
+# copy_from = "rsync -a {host}:{src}/ {dst}/"
+# exec = "ssh {host} {command}"
+# python = "python3"           # remote interpreter that has amide installed
+# root = "/tmp/amide"          # remote directory that holds copied runs
 """
 
 _SECRET_KEYS = {"api_key", "token", "secret", "password"}
@@ -94,6 +107,11 @@ class Config:
     @property
     def providers(self) -> dict[str, dict[str, Any]]:
         return {name: dict(entry) for name, entry in self.raw.get("providers", {}).items()}
+
+    @property
+    def runners(self) -> dict[str, dict[str, Any]]:
+        """``[runners.*]``: command templates that run a step on another machine."""
+        return {name: dict(entry) for name, entry in self.raw.get("runners", {}).items()}
 
     @property
     def agents(self) -> dict[str, Any]:
