@@ -325,6 +325,137 @@ def _message_dict(message) -> dict:
     return entry
 
 
+# --- experiment ------------------------------------------------------------
+
+
+@app.command()
+def experiment(
+    question: str = typer.Argument(
+        None, help="The question to investigate; with --resume, a follow-up message."
+    ),
+    model: str = typer.Option(
+        None, "--model", "-m", metavar="PROVIDER/MODEL", help="Default: the config's model."
+    ),
+    resume: str = typer.Option(None, "--resume", metavar="ID", help="Continue an experiment."),
+    interactive: bool = typer.Option(
+        False, "--interactive", "-i", help="Chat with the orchestrator between its turns."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Approve every expensive step."),
+    max_tokens: int = typer.Option(None, "--max-tokens", help="Total token budget."),
+    max_seconds: float = typer.Option(None, "--max-seconds", help="Wall-clock budget."),
+    max_dollars: float = typer.Option(
+        None, "--max-dollars", help="Dollar budget; needs [pricing] in the config."
+    ),
+    max_turns: int = typer.Option(40, "--max-turns", help="Model calls per agent."),
+    runs_dir: Path = typer.Option(None, "--runs-dir", help="Where experiments are kept."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Hide sub-agent activity."),
+) -> None:
+    """Run an open experiment: an orchestrator and its sub-agents answer a question."""
+    import sys
+
+    from amide.agents.session import Budget, Experiment, Session
+    from amide.harness.errors import HarnessError
+    from amide.harness.registry import Registry
+    from amide.harness.runs import RunStore
+    from amide.models import resolve
+
+    if resume is None and not question:
+        typer.echo("amide experiment: give a question, or --resume ID", err=True)
+        raise typer.Exit(2)
+    config = _config()
+    agents_config = config.agents
+    try:
+        store = RunStore(runs_dir or config.runs_dir)
+        registry = Registry.load(config)
+        if resume is not None:
+            state = store.get_any(resume)
+            if not isinstance(state, Experiment):
+                typer.echo(
+                    f"amide experiment: {resume} is a protocol run, not an experiment", err=True
+                )
+                raise typer.Exit(2)
+            if model:
+                state.model = model
+        else:
+            resolve(model or agents_config.get("model"), config)  # fail early on a bad model
+            budget = Budget(
+                max_tokens=max_tokens or agents_config.get("max_tokens"),
+                max_seconds=max_seconds or agents_config.get("max_seconds"),
+                max_dollars=max_dollars or agents_config.get("max_dollars"),
+            )
+            state = Experiment.create(store.root, question, model, budget)
+    except HarnessError as error:
+        typer.echo(f"amide experiment: {error}", err=True)
+        raise typer.Exit(2) from None
+    typer.echo(f"experiment {state.id}: {state.dir}", err=True)
+
+    def on_text(piece: str) -> None:
+        sys.stdout.write(piece)
+        sys.stdout.flush()
+
+    def on_event(kind: str, record, payload) -> None:
+        tag = f"[{record.role} #{record.n}]"
+        if kind == "agent_start" and record.n > 1:
+            typer.echo(f"{tag} {record.task[:120]}", err=True)
+        elif kind == "agent_done" and record.n > 1:
+            typer.echo(
+                f"{tag} {record.status}: {(record.result or record.error or '')[:200]}", err=True
+            )
+        elif kind == "call":
+            call, result, ok = payload
+            if record.n > 1 and quiet:
+                return
+            args = ", ".join(f"{k}={str(v)[:60]!r}" for k, v in call.arguments.items())
+            typer.echo(
+                f"{tag} -> {call.name}({args}): {'ok' if ok else 'error'} {result[:160]}", err=True
+            )
+        elif kind == "run" and not quiet:
+            typer.echo(f"{tag}    {payload}", err=True)
+
+    def approve(spec, args) -> bool:
+        if not sys.stdin.isatty():
+            return False
+        return typer.confirm(f"{spec.name} is expensive. Run it?", err=True)
+
+    def ask_user() -> str | None:
+        sys.stdout.write("\n")
+        try:
+            return typer.prompt("you", prompt_suffix="> ", default="", show_default=False)
+        except (EOFError, typer.Abort):
+            return None
+
+    session = Session(
+        state,
+        registry,
+        config,
+        model=model,
+        yes=yes,
+        approve=approve,
+        on_text=on_text,
+        on_event=on_event,
+        ask_user=ask_user if interactive else None,
+        max_turns=max_turns,
+    )
+    state = session.run(question if resume is not None else None)
+    sys.stdout.write("\n")
+    typer.echo(
+        f"experiment {state.id}: {state.status}; {len(state.agents)} agent(s), "
+        f"{state.input_tokens} in, {state.output_tokens} out, {state.seconds:.0f}s"
+        + (f", ${state.dollars:.2f}" if state.dollars else ""),
+        err=True,
+    )
+    if state.error:
+        typer.echo(f"  {state.error}", err=True)
+    for name in ("abstract", "methodology", "results"):
+        if name in state.documents:
+            typer.echo(f"  {name}: {state.documents[name]}", err=True)
+    if state.status == "done":
+        raise typer.Exit()
+    if state.status in ("paused", "budget_exceeded"):
+        raise typer.Exit(RESUMABLE_EXIT)
+    raise typer.Exit(1)
+
+
 # --- models ----------------------------------------------------------------
 
 
@@ -505,13 +636,15 @@ def protocols_validate(protocol: str = typer.Argument(..., help="A name or a YAM
 
 @runs_app.command("list")
 def runs_list(runs_dir: Path = typer.Option(None, "--runs-dir")) -> None:
-    """List runs, newest first."""
+    """List runs and experiments, newest first."""
+    from amide.agents.session import Experiment
     from amide.harness.runs import RunStore
 
     store = RunStore(runs_dir or _config().runs_dir)
-    for state in store.list():
-        row = state.summary()
-        typer.echo(f"{row['id']}  {row['status']:<16} {row['steps']:<6} {row['protocol']}")
+    rows = [state.summary() for state in store.list()]
+    rows += [state.summary() for state in Experiment.list(store.root)]
+    for row in sorted(rows, key=lambda r: (r["created"], r["id"]), reverse=True):
+        typer.echo(f"{row['id']}  {row['status']:<16} {row['steps']:<9} {row['protocol']}")
 
 
 @runs_app.command("show")
@@ -520,16 +653,20 @@ def runs_show(
     runs_dir: Path = typer.Option(None, "--runs-dir"),
     log_lines: int = typer.Option(10, "--log", help="How many lines of run.log to show."),
 ) -> None:
-    """Show a run's status, steps, checks, and log tail."""
+    """Show a run's status, steps, checks, and log tail (or an experiment's agents)."""
+    from amide.agents.session import Experiment
     from amide.harness.errors import HarnessError
     from amide.harness.runs import RunStore
 
     store = RunStore(runs_dir or _config().runs_dir)
     try:
-        state = store.get(run)
+        state = store.get_any(run)
     except HarnessError as error:
         typer.echo(f"amide runs show: {error}", err=True)
         raise typer.Exit(2) from None
+    if isinstance(state, Experiment):
+        _show_experiment(state, log_lines)
+        return
     typer.echo(f"{state.id}: {state.protocol_name}, {state.status}")
     if state.error:
         typer.echo(f"  {state.error}")
@@ -541,6 +678,32 @@ def runs_show(
     for check in state.checks:
         verdict = "pass" if check.get("passed") else "FAIL"
         typer.echo(f"  check {check['id']}: {verdict}  ({check['expr']})")
+    if log_lines and state.log_path.exists():
+        lines = state.log_path.read_text().splitlines()[-log_lines:]
+        typer.echo("log:")
+        for line in lines:
+            typer.echo(f"  {line}")
+
+
+def _show_experiment(state, log_lines: int) -> None:
+    typer.echo(f"{state.id}: experiment, {state.status}")
+    typer.echo(f"  question: {state.question}")
+    if state.error:
+        typer.echo(f"  {state.error}")
+    typer.echo(f"  dir: {state.dir}")
+    typer.echo(
+        f"  usage: {state.input_tokens} in, {state.output_tokens} out, {state.seconds:.0f}s"
+        + (f", ${state.dollars:.2f}" if state.dollars else "")
+    )
+    for record in state.agents:
+        parent = f" (from #{record.parent})" if record.parent else ""
+        error = f"  {record.error}" if record.error else ""
+        typer.echo(
+            f"  #{record.n} {record.role:<16} {record.status:<16} {record.turns} turns, "
+            f"{record.calls} calls{parent}{error}"
+        )
+    for name, path in state.documents.items():
+        typer.echo(f"  {name}: {path}")
     if log_lines and state.log_path.exists():
         lines = state.log_path.read_text().splitlines()[-log_lines:]
         typer.echo("log:")

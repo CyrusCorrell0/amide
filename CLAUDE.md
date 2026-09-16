@@ -20,6 +20,12 @@ design reference and milestone plan; read it before changing the harness.
   (builtin providers, config overlay, `provider/model` resolution), and
   `loop.py` (the tool-calling loop `amide ask` and the agents use). No
   vendor SDKs; tests fake the three `http` functions.
+- `src/amide/agents/` is the open-experiment session: `roles.py` (the six
+  roles, their prompts, which tools each gets) and `session.py`
+  (`Experiment` state under the runs root, `Session` running the
+  orchestrator, spawning sub-agents, budgets, and the session-only tools
+  such as `run_protocol` and `finish_experiment`). Tests script the model
+  by patching `Provider.adapter`.
 - `tui/` is the Go viewer; `src/amide/tui.py` fetches its binary.
 - `tests/` mirrors the package. `tests/conftest.py` has stub tools and a stub
   protocol most tests use.
@@ -56,3 +62,6 @@ design reference and milestone plan; read it before changing the harness.
   `--remote` asks each one for its model ids.
 - `ANTHROPIC_API_KEY=... uv run amide ask -m anthropic/claude-opus-5 "fetch 1AKI and tell me its size"`
   -- one tool-using call; transcript under `.amide/scratch/`.
+- `uv run amide experiment -m anthropic/claude-opus-5 --max-dollars 5 "Is lysozyme 1AKI stable at 350 K in a short OpenMM run?"`
+  -- an open experiment; agents, protocols, runs, and the three documents
+  land under `.amide/runs/<id>/`. Add `-i` to chat with the orchestrator.

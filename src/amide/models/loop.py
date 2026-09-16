@@ -36,7 +36,8 @@ class Outcome:
     usage: Usage = field(default_factory=Usage)
     calls: list[CallRecord] = field(default_factory=list)
     turns: int = 0
-    stop: str = "end"  # a Reply stop, or "max_turns"
+    stop: str = "end"  # a Reply stop, "max_turns", or "stopped"
+    detail: str = ""
 
 
 def converse(
@@ -51,10 +52,27 @@ def converse(
     on_call: CallSink | None = None,
     max_turns: int = 10,
     stream: bool = True,
+    stop_if: Callable[[], str | None] | None = None,
+    after_turn: Callable[[Reply], None] | None = None,
+    after_results: Callable[[], None] | None = None,
+    annotate: Callable[[], str | None] | None = None,
 ) -> Outcome:
-    """Drive ``request`` to a final reply, appending every turn to its messages."""
+    """Drive ``request`` to a final reply, appending every turn to its messages.
+
+    ``stop_if`` runs before each model call and returns a reason to stop
+    instead (a spent budget); ``after_turn`` sees every reply as soon as it is
+    appended (to account for it); ``annotate`` runs after the tool calls of a
+    turn and its text, if any, is appended to the last tool result so the
+    model reads it next; ``after_results`` runs once those results are
+    appended (to checkpoint).
+    """
     outcome = Outcome(reply=Reply())
     for _ in range(max_turns):
+        if stop_if is not None:
+            reason = stop_if()
+            if reason:
+                outcome.stop, outcome.detail = "stopped", reason
+                return outcome
         outcome.turns += 1
         if stream:
             reply = adapter.stream(request, on_text or (lambda piece: None))
@@ -66,6 +84,8 @@ def converse(
         outcome.usage = outcome.usage + reply.usage
         request.messages.append(reply.message())
         outcome.stop = reply.stop
+        if after_turn is not None:
+            after_turn(reply)
         if reply.stop != "tool_calls":
             return outcome
         results = []
@@ -75,7 +95,13 @@ def converse(
             if on_call:
                 on_call(call, record.result, record.ok)
             results.append(Message.tool_result(call, record.result, is_error=not record.ok))
+        if annotate is not None and results:
+            note = annotate()
+            if note:
+                results[-1].content += f"\n\n[harness note: {note}]"
         request.messages.extend(results)
+        if after_results is not None:
+            after_results()
     outcome.stop = "max_turns"
     return outcome
 

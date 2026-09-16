@@ -140,20 +140,30 @@ class RunStore:
         state.save()
         return state
 
-    def get(self, run_id: str) -> RunState:
+    def resolve(self, run_id: str) -> Path:
+        """The directory for a run id or a unique prefix of one."""
         directory = self.root / run_id
-        if not directory.is_dir():
-            matches = (
-                [p for p in self.root.glob(f"{run_id}*") if p.is_dir()]
-                if self.root.is_dir()
-                else []
-            )
-            if len(matches) == 1:
-                directory = matches[0]
-            elif matches:
-                raise HarnessError(f"{run_id} is ambiguous: {', '.join(m.name for m in matches)}")
-            else:
-                raise HarnessError(f"no run {run_id} under {self.root}")
+        if directory.is_dir():
+            return directory
+        matches = (
+            [p for p in self.root.glob(f"{run_id}*") if p.is_dir()] if self.root.is_dir() else []
+        )
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            raise HarnessError(f"{run_id} is ambiguous: {', '.join(m.name for m in matches)}")
+        raise HarnessError(f"no run {run_id} under {self.root}")
+
+    def get(self, run_id: str) -> RunState:
+        return RunState.load(self.resolve(run_id))
+
+    def get_any(self, run_id: str):
+        """A RunState, or an Experiment when the directory holds one."""
+        directory = self.resolve(run_id)
+        if (directory / "experiment.json").is_file():
+            from amide.agents.session import Experiment
+
+            return Experiment.load(directory)
         return RunState.load(directory)
 
     def list(self) -> list[RunState]:
@@ -166,8 +176,8 @@ class RunStore:
         return sorted(runs, key=lambda run: (run.created, run.id), reverse=True)
 
     def export(self, run_id: str, out: Path | None = None) -> Path:
-        """Write manifest.json and pack the run into a tarball."""
-        state = self.get(run_id)
+        """Write manifest.json and pack the run (or experiment) into a tarball."""
+        state = self.get_any(run_id)
         manifest = {
             "run": state.id,
             "protocol": state.protocol_name,

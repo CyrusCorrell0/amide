@@ -22,8 +22,21 @@ dir = ".amide/runs"            # relative paths resolve against the working dire
 paths = []                     # extra directories of *.py and *.yaml tools
 
 [defaults]
-# model = "anthropic/claude-opus-5"   # used by `amide ask` when --model is omitted
+# model = "anthropic/claude-opus-5"   # `amide ask` and `amide experiment` without --model
 # max_tokens = 16000
+
+[agents]
+# model = "anthropic/claude-opus-5"   # every agent role, unless [agents.models] says otherwise
+# max_tokens = 2000000                # experiment budget defaults; the CLI flags override
+# max_seconds = 3600
+# max_dollars = 20
+
+[agents.models]
+# find = "deepseek/deepseek-chat"     # a cheaper model for a role
+# review = "openai/gpt-5"
+
+[pricing]
+# "anthropic/claude-opus-5" = { input = 5.0, output = 25.0 }   # dollars per million tokens
 
 # Providers. These builtins exist without being listed here; list one to
 # change it, or add your own. `amide models list` shows them all.
@@ -81,6 +94,16 @@ class Config:
     @property
     def providers(self) -> dict[str, dict[str, Any]]:
         return {name: dict(entry) for name, entry in self.raw.get("providers", {}).items()}
+
+    @property
+    def agents(self) -> dict[str, Any]:
+        """``[agents]``: ``model`` for every role, ``[agents.models]`` per role, budget defaults."""
+        return dict(self.raw.get("agents", {}))
+
+    @property
+    def pricing(self) -> dict[str, Any]:
+        """``[pricing]``: ``"provider/model" = {input = $/M, output = $/M}``."""
+        return dict(self.raw.get("pricing", {}))
 
     def redacted(self) -> dict[str, Any]:
         """The raw config with any literal secret replaced, for printing."""

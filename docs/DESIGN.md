@@ -52,7 +52,9 @@ src/amide/
     gemini.py       Gemini native API
     providers.py    builtin providers, config overlay, provider/model resolution
     loop.py         the tool-calling loop behind `amide ask`
-  agents/           agent roles and the orchestrator (milestone 4)
+  agents/
+    roles.py        the six roles: prompts and tool selection
+    session.py      Experiment state, Session (orchestrator, spawn, budgets, session tools)
 tui/                the Go viewer (existing)
 docs/DESIGN.md      this file
 ```
@@ -388,31 +390,57 @@ append the results, repeat until it stops or `max_turns` is spent.
 `amide ask` is that loop once, from the command line, with a transcript
 and tool outputs left under `.amide/scratch/ask-<time>/`.
 
-## Agents (milestone 4)
+## Agents
 
-Open experiments run as an interactive session. The session holds one
-orchestrator agent and can spawn sub-agents with narrower tool sets and
-possibly different models. Each sub-agent runs one task and returns a
-result to its parent.
+`amide experiment "question"` runs an open experiment (`src/amide/agents/`).
+A session holds one orchestrator agent and can spawn sub-agents with
+narrower tool sets and possibly different models. Each sub-agent runs one
+task to completion and returns its report to its parent as a tool result;
+sub-agents start with no memory of the parent's conversation, so the
+orchestrator's brief has to be self-contained (its prompt says so).
 
-| role              | job                                                          | default tools                 |
-|-------------------|--------------------------------------------------------------|-------------------------------|
-| `orchestrate`     | own the experiment, delegate, decide when it is done         | spawn, protocol authoring     |
-| `plan`            | turn a question into a protocol or a task list               | registry lookup, read-only    |
-| `find`            | locate data, structures, literature, prior runs              | fetch tools, shell (read)     |
-| `fix`             | make a failing step or protocol work                         | python, shell, the failing tool |
-| `review`          | critique a plan, a result, or a report                       | read-only                     |
-| `general-purpose` | anything else                                                | everything                    |
+| role              | job                                                          | registry tools        | session tools                                            |
+|-------------------|--------------------------------------------------------------|-----------------------|----------------------------------------------------------|
+| `orchestrate`     | own the experiment, delegate, decide when it is done         | fetch tools           | read, write, list, describe, run_protocol, spawn_agent, finish_experiment |
+| `plan`            | turn a question into a protocol or a task list               | none                  | read, list, describe                                     |
+| `find`            | locate data, structures, literature, prior runs              | fetch tools, shell    | read, write, list, describe                              |
+| `fix`             | make a failing step or protocol work                         | everything            | read, write, list, describe, run_protocol                |
+| `review`          | critique a plan, a result, or a report                       | none                  | read, list, describe                                     |
+| `general-purpose` | anything else                                                | everything            | read, write, list, describe, run_protocol, spawn_agent   |
 
-An open experiment ends with three files in its run directory:
-`abstract.md`, `methodology.md` (with the protocol it converged on, so
-the experiment can be re-run as a predefined protocol), and
-`results.md`. Sessions have token, dollar, and wall-clock budgets; the
-orchestrator is told when it is close and stopped when it is over.
+Session tools live in `agents/session.py`, not the registry, because they
+need the experiment: `read_file`, `write_file`, `list_files` (confined to
+the experiment directory), `describe_tools` and `describe_protocol`
+(manifests and bundled protocols), `run_protocol` (a name or complete
+protocol YAML, written under `protocols/`, validated, run through the
+ordinary runner into `runs/`, with status, checks, and outputs returned),
+`spawn_agent` (depth-limited to two), and `finish_experiment`. Registry
+tools whose requirements are missing are left out of a role's tool list;
+`describe_tools` still reports them, with what is missing.
 
-The session UI is a Python chat loop with streaming output, tool-call
-display, and approval prompts. The Go binary stays the structure
-viewer; the agent hands it a file with `amide view`.
+An experiment ends with three files in its directory: `abstract.md`,
+`methodology.md` (with the protocol it converged on, verbatim, so the
+experiment can be re-run as a predefined protocol), and `results.md`,
+written by `finish_experiment`. If the orchestrator stops without calling
+it, it is nudged once; if it still does not, the experiment is `paused`
+and `amide experiment --resume ID "follow-up"` continues it with the
+transcript intact.
+
+Budgets are tokens (input plus output across every agent), wall-clock
+seconds, and dollars (from a `[pricing]` table in the config, per
+`provider/model`). At 80% a harness note is appended to the next tool
+result; at 100% no further model call is made and the experiment is
+`budget_exceeded`, resumable with a larger budget. Every model call and
+tool call is checkpointed to `experiment.json` and the agent's
+`transcript.json`.
+
+`--interactive` turns the CLI into a chat loop: after each orchestrator
+turn the user can reply, and the orchestrator is told it may end a turn
+with a question. Expensive tools and expensive protocol steps ask on a
+terminal, are approved by `--yes`, and are otherwise reported to the model
+as not approved. `amide runs list` shows experiments next to protocol
+runs; `amide runs show` and `amide runs export` work on both. The Go
+binary stays the structure viewer.
 
 ## Runners
 
@@ -428,9 +456,9 @@ results back, with the same manifest and the same run layout.
 | 0  | CLI registration      | `amide` on PyPI                                                            | done    |
 | 1  | viewer                | `amide view`                                                               | done    |
 | 2  | protocols             | tool registry, 14 builtin tools, protocol runner, runs, resume, detach, export, `openmm-control` bundled | done    |
-| 3  | models                | three adapters, `amide models list`, `amide ask` for a one-shot tool-using call | this branch |
-| 4  | agents                | roles, orchestrator, interactive session, abstract/methodology/results     | next    |
-| 5  | remote runner         | run steps through a user-supplied CLI                                      |         |
+| 3  | models                | three adapters, `amide models list`, `amide ask` for a one-shot tool-using call | done    |
+| 4  | agents                | roles, orchestrator, interactive session, abstract/methodology/results     | this branch |
+| 5  | remote runner         | run steps through a user-supplied CLI                                      | next    |
 | 6  | tool publishing       | a shared index and `amide tools publish`                                   |         |
 
 ## Licensing

@@ -98,7 +98,7 @@ def test_help_does_not_import_tui_or_harness():
             "-c",
             "import sys, amide.cli; "
             "heavy = [m for m in sys.modules if m.startswith(('amide.tui', 'amide.harness', "
-            "'amide.tools', 'amide.config', 'amide.models', 'yaml'))]; "
+            "'amide.tools', 'amide.config', 'amide.models', 'amide.agents', 'yaml'))]; "
             "print(heavy); sys.exit(1 if heavy else 0)",
         ],
         capture_output=True,
@@ -527,6 +527,106 @@ def test_ask_non_end_stops_exit_1(project: Path, scripted, monkeypatch):
     monkeypatch.setattr(Provider, "adapter", lambda self: Failing([]))
     result = runner.invoke(app, ["ask", "x", "-m", "openai/gpt-x"])
     assert result.exit_code == 1 and "401: bad key" in _output(result)
+
+
+# --- experiment ------------------------------------------------------------
+
+
+def test_experiment_command(project: Path, scripted):
+    from amide.models import Reply, ToolCall, Usage
+
+    replies, adapters = scripted
+    finish = ToolCall(
+        "f",
+        "finish_experiment",
+        {"abstract": "A.", "methodology": "M.", "results": "R."},
+    )
+    replies.extend(
+        [
+            Reply(
+                text="Delegating.",
+                tool_calls=[ToolCall("s", "spawn_agent", {"role": "find", "task": "look"})],
+                stop="tool_calls",
+                usage=Usage(5, 5),
+            ),
+            Reply(text="found nothing", stop="end", usage=Usage(5, 5)),
+            Reply(tool_calls=[finish], stop="tool_calls", usage=Usage(5, 5)),
+            Reply(text="All done.", stop="end", usage=Usage(5, 5)),
+        ]
+    )
+    result = runner.invoke(
+        app, ["experiment", "what?", "-m", "openai/gpt-x", "--max-tokens", "1000"]
+    )
+    assert result.exit_code == 0, _output(result)
+    assert "Delegating.All done." in result.stdout
+    err = _output(result)
+    assert "[find #2] look" in err and "[find #2] done: found nothing" in err
+    assert "[orchestrate #1] -> finish_experiment(" in err
+    assert "done; 2 agent(s), 20 in, 20 out" in err
+    assert "abstract:" in err
+    runs = _runs(project)
+    assert len(runs) == 1 and (runs[0] / "abstract.md").read_text() == "A.\n"
+    state = json.loads((runs[0] / "experiment.json").read_text())
+    assert state["budget"]["max_tokens"] == 1000
+
+    listed = runner.invoke(app, ["runs", "list"])
+    assert listed.exit_code == 0
+    assert f"{runs[0].name}  done" in listed.stdout and "experiment: what?" in listed.stdout
+    shown = runner.invoke(app, ["runs", "show", runs[0].name])
+    assert shown.exit_code == 0, _output(shown)
+    assert "question: what?" in shown.stdout
+    assert "#2 find" in shown.stdout and "(from #1)" in shown.stdout
+    exported = runner.invoke(app, ["runs", "export", runs[0].name, "--out", "e.tar.gz"])
+    assert exported.exit_code == 0, _output(exported)
+
+
+def test_experiment_resume_and_errors(project: Path, scripted):
+    from amide.models import Reply
+
+    replies, adapters = scripted
+    replies.extend([Reply(text="hm", stop="end"), Reply(text="hm", stop="end")])
+    result = runner.invoke(app, ["experiment", "q", "-m", "openai/gpt-x"])
+    assert result.exit_code == 3
+    assert "paused" in _output(result) and "--resume" in _output(result)
+    (run_dir,) = _runs(project)
+
+    replies.extend([Reply(text="ok", stop="end"), Reply(text="ok", stop="end")])
+    result = runner.invoke(app, ["experiment", "--resume", run_dir.name, "go on"])
+    assert result.exit_code == 3, _output(result)
+    assert adapters[-1].requests[0]["messages"][-1].content == "go on"
+
+    result = runner.invoke(app, ["experiment"])
+    assert result.exit_code == 2 and "give a question" in _output(result)
+    result = runner.invoke(app, ["experiment", "q", "-m", "zzz/m"])
+    assert result.exit_code == 2 and "unknown provider" in _output(result)
+    result = runner.invoke(app, ["experiment", "q"])
+    assert result.exit_code == 2 and "no model given" in _output(result)
+    protocol_run = runner.invoke(app, ["run", "arith"])
+    assert protocol_run.exit_code == 0
+    other = [r for r in _runs(project) if r != run_dir][0]
+    result = runner.invoke(app, ["experiment", "--resume", other.name])
+    assert result.exit_code == 2 and "not an experiment" in _output(result)
+
+
+def test_experiment_interactive(project: Path, scripted):
+    from amide.models import Reply, ToolCall
+
+    replies, _ = scripted
+    finish = ToolCall(
+        "f", "finish_experiment", {"abstract": "A", "methodology": "M", "results": "R"}
+    )
+    replies.extend(
+        [
+            Reply(text="Run it?", stop="end"),
+            Reply(tool_calls=[finish], stop="tool_calls"),
+            Reply(text="Done.", stop="end"),
+        ]
+    )
+    result = runner.invoke(
+        app, ["experiment", "q", "-m", "openai/gpt-x", "--interactive"], input="yes\n/quit\n"
+    )
+    assert result.exit_code == 0, _output(result)
+    assert "Run it?" in result.stdout and "Done." in result.stdout
 
 
 def test_stub_protocol_matches_conftest():
