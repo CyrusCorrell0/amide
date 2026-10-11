@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 - unreleased
+## 0.2.1 - 2026-10-11
 
 - The search screen names its columns (PDB, FRAMES, ATOMS, CHAINS) and `c` copies the highlighted file's path to the clipboard.
 
