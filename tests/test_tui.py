@@ -106,7 +106,7 @@ def test_env_override_wins_without_touching_the_network(monkeypatch, tmp_path, c
 def test_download_verifies_then_caches(release, capsys):
     path = tui.binary_path()
 
-    assert path == tui._cache_dir() / "amide-tui"
+    assert path == tui.cache_dir() / "amide-tui"
     assert path.read_bytes() == release.payload
     assert release.hits[release.asset] == 1
     line = capsys.readouterr().err
@@ -125,7 +125,7 @@ def test_checksum_mismatch_leaves_nothing_behind(release):
     with pytest.raises(tui.TuiUnavailable, match="checksum"):
         tui.binary_path()
 
-    cache = tui._cache_dir()
+    cache = tui.cache_dir()
     assert not (cache / "amide-tui").exists()
     assert list(cache.iterdir()) == []
 
@@ -143,5 +143,5 @@ def test_unreachable_server_explains_the_offline_case(monkeypatch):
     monkeypatch.setattr(tui, "_RELEASE_URL", f"http://127.0.0.1:{port}")
     _set_platform(monkeypatch, "Linux", "x86_64")
 
-    with pytest.raises(tui.TuiUnavailable, match="Couldn't reach GitHub"):
+    with pytest.raises(tui.TuiUnavailable, match="could not reach GitHub"):
         tui.binary_path()

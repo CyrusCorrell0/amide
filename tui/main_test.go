@@ -25,6 +25,7 @@ func TestResolveTarget(t *testing.T) {
 		args     []string
 		wantDir  string
 		wantFile string
+		wantRows string
 		wantErr  bool
 	}{
 		{name: "no args roots the picker at the cwd", args: nil, wantDir: cwd},
@@ -32,11 +33,13 @@ func TestResolveTarget(t *testing.T) {
 		{name: "a file opens with the picker at its parent", args: []string{file}, wantDir: dir, wantFile: file},
 		{name: "a missing path is an error", args: []string{missing}, wantErr: true},
 		{name: "two paths are an error", args: []string{dir, file}, wantErr: true},
+		{name: "--search names the rows file", args: []string{"--search", "x.json"}, wantRows: "x.json"},
+		{name: "--search with no file is an error", args: []string{"--search"}, wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDir, gotFile, err := resolveTarget(tt.args)
+			gotDir, gotFile, gotRows, err := resolveTarget(tt.args)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("resolveTarget(%q) = (%q, %q, nil), want an error", tt.args, gotDir, gotFile)
@@ -46,8 +49,8 @@ func TestResolveTarget(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveTarget(%q): %v", tt.args, err)
 			}
-			if gotDir != tt.wantDir || gotFile != tt.wantFile {
-				t.Errorf("resolveTarget(%q) = (%q, %q), want (%q, %q)", tt.args, gotDir, gotFile, tt.wantDir, tt.wantFile)
+			if gotDir != tt.wantDir || gotFile != tt.wantFile || gotRows != tt.wantRows {
+				t.Errorf("resolveTarget(%q) = (%q, %q, %q), want (%q, %q, %q)", tt.args, gotDir, gotFile, gotRows, tt.wantDir, tt.wantFile, tt.wantRows)
 			}
 		})
 	}
@@ -55,7 +58,7 @@ func TestResolveTarget(t *testing.T) {
 
 func TestResolveTargetMissingPathNamesIt(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.pdb")
-	_, _, err := resolveTarget([]string{missing})
+	_, _, _, err := resolveTarget([]string{missing})
 	if err == nil {
 		t.Fatal("want an error for a missing path")
 	}

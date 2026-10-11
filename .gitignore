@@ -1,4 +1,8 @@
 __pycache__/
+*.md
+!README.md
+!CHANGELOG.md
+!SKILL.md
 *.py[cod]
 *.egg-info/
 .eggs/
@@ -12,3 +16,5 @@ venv/
 htmlcov/
 .env
 .env.*
+.playwright-mcp/
+*.stackdump

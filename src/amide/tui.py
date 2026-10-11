@@ -27,10 +27,8 @@ _ASSETS = {
 }
 _MACHINES = {"amd64": "x86_64", "aarch64": "arm64"}
 _SUPPORTED = "Darwin/arm64, Darwin/x86_64, Linux/x86_64, Linux/aarch64, Windows/AMD64"
-_UNREACHABLE = (
-    "Couldn't reach GitHub to fetch the viewer. "
-    "Try again online, or set AMIDE_TUI to a local binary."
-)
+_LOCAL = "set `AMIDE_TUI` to a local binary"
+_UNREACHABLE = f"amide view: could not reach GitHub to fetch the viewer; try again online, or {_LOCAL}"
 
 
 class TuiUnavailable(Exception):
@@ -39,7 +37,7 @@ class TuiUnavailable(Exception):
 
 def asset_name() -> str:
     """Name of the release asset for this machine."""
-    os_, arch = _target()
+    os_, arch = target()
     return f"amide-tui_{amide.__version__}_{os_}_{arch}{'.exe' if os_ == 'windows' else ''}"
 
 
@@ -48,23 +46,30 @@ def binary_path() -> Path:
     override = os.environ.get("AMIDE_TUI")
     if override:
         return Path(override)
-    os_, arch = _target()
-    cached = _cache_dir() / ("amide-tui.exe" if os_ == "windows" else "amide-tui")
-    return cached if cached.exists() else _download(cached, os_, arch)
+    cached = cached_binary()
+    return cached if cached.exists() else _download(cached, *target())
 
 
-def _target() -> tuple[str, str]:
+def cached_binary() -> Path:
+    """Where the viewer for this machine lives once downloaded."""
+    os_, _ = target()
+    return cache_dir() / ("amide-tui.exe" if os_ == "windows" else "amide-tui")
+
+
+def target() -> tuple[str, str]:
+    """(os, arch) of the release asset for this machine; raises TuiUnavailable."""
     system, machine = platform.system(), platform.machine()
     key = (system, _MACHINES.get(machine.lower(), machine.lower()))
     if key not in _ASSETS:
         raise TuiUnavailable(
-            f"There is no amide viewer build for {system}/{machine}; "
-            f"the supported platforms are {_SUPPORTED}."
+            f"amide view: found no viewer build for {system}/{machine}; "
+            f"builds exist for {_SUPPORTED}; {_LOCAL}"
         )
     return _ASSETS[key]
 
 
-def _cache_dir() -> Path:
+def cache_dir() -> Path:
+    """Cache directory for this version of the viewer."""
     root = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
     return Path(root) / "amide" / "tui" / amide.__version__
 
@@ -94,8 +99,8 @@ def _download(dest: Path, os_: str, arch: str) -> Path:
     if digest.hexdigest() != expected:
         partial.unlink(missing_ok=True)
         raise TuiUnavailable(
-            "Downloaded viewer failed checksum verification; "
-            "the partial file was deleted. Try again."
+            "amide view: deleted the downloaded viewer, which failed checksum "
+            "verification; try again"
         )
     partial.chmod(0o755)
     os.replace(partial, dest)
@@ -109,7 +114,10 @@ def _checksum(url: str, asset: str) -> str:
         digest, _, name = line.partition("  ")
         if name.strip() == asset:
             return digest.strip()
-    raise TuiUnavailable(f"The release for v{amide.__version__} lists no checksum for {asset}.")
+    raise TuiUnavailable(
+        f"amide view: found no checksum for `{asset}` in the v{amide.__version__} "
+        f"release; {_LOCAL}"
+    )
 
 
 def _open(url: str):
@@ -117,8 +125,8 @@ def _open(url: str):
         return urllib.request.urlopen(url, timeout=_TIMEOUT)
     except urllib.error.HTTPError as error:
         raise TuiUnavailable(
-            f"GitHub returned {error.code} for {url}, so the viewer for this release "
-            "is unavailable."
+            f"amide view: got {error.code} from GitHub for {url}, so the viewer "
+            f"for this release is unavailable; {_LOCAL}"
         ) from None
     except OSError:
         raise TuiUnavailable(_UNREACHABLE) from None

@@ -46,42 +46,64 @@ func (w syncWriter) Write(p []byte) (int, error) {
 // rooted at and, when a file was named, the file to open straight away. A
 // directory roots the picker and opens nothing; a file opens the viewer with the
 // picker rooted at its parent, so quitting the viewer lands somewhere useful.
-func resolveTarget(args []string) (dir, file string, err error) {
+// `--search ROWS.json` returns only rows, the file `amide search` wrote.
+func resolveTarget(args []string) (dir, file, rows string, err error) {
+	if len(args) > 0 && args[0] == "--search" {
+		if len(args) != 2 {
+			return "", "", "", errUsage
+		}
+		return "", "", args[1], nil
+	}
 	switch len(args) {
 	case 0:
 		dir, err = os.Getwd()
-		return dir, "", err
+		return dir, "", "", err
 	case 1:
 		info, err := os.Stat(args[0])
 		if err != nil {
 			var pathErr *fs.PathError
 			if errors.As(err, &pathErr) {
-				return "", "", fmt.Errorf("%s: %w", args[0], pathErr.Err)
+				return "", "", "", fmt.Errorf("%s: %w", args[0], pathErr.Err)
 			}
-			return "", "", err
+			return "", "", "", err
 		}
 		switch {
 		case info.IsDir():
-			return args[0], "", nil
+			return args[0], "", "", nil
 		case info.Mode().IsRegular():
-			return filepath.Dir(args[0]), args[0], nil
+			return filepath.Dir(args[0]), args[0], "", nil
 		default:
-			return "", "", fmt.Errorf("%s: not a file or directory", args[0])
+			return "", "", "", fmt.Errorf("%s: not a file or directory", args[0])
 		}
 	default:
-		return "", "", errors.New("usage: amide-tui [PATH]")
+		return "", "", "", errUsage
 	}
 }
 
+var errUsage = errors.New("usage: amide-tui [PATH | --search ROWS.json]")
+
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "amide-tui: %v\n", err)
+	os.Exit(2)
+}
+
 func main() {
-	dir, file, err := resolveTarget(os.Args[1:])
+	dir, file, rows, err := resolveTarget(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "amide-tui: %v\n", err)
-		os.Exit(2)
+		fail(err)
+	}
+
+	app := model.NewAppModel(dir, file)
+	if rows != "" {
+		doc, err := model.LoadRows(rows)
+		if err != nil {
+			fail(err)
+		}
+		app = model.NewSearchApp(doc)
 	}
 
 	p := tea.NewProgram(
-		model.NewAppModel(dir, file),
+		app,
 		tea.WithAltScreen(),
 		tea.WithOutput(syncWriter{os.Stdout}),
 	)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/CyrusCorrell0/amide/tui/pdb"
 	"github.com/CyrusCorrell0/amide/tui/ui"
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -14,6 +15,7 @@ const (
 	ScreenFilePicker Screen = iota
 	ScreenViewer
 	ScreenError
+	ScreenSearch
 )
 
 type MoleculeLoadedMsg struct {
@@ -29,7 +31,9 @@ type MoleculeErrMsg struct {
 type AppModel struct {
 	width, height int
 	screen        Screen
+	home          Screen // where the viewer and the error screen return to
 	picker        *FilePickerModel
+	search        *SearchModel
 	viewer        *ViewerModel
 	lastErr       string
 	file          string
@@ -40,12 +44,25 @@ type AppModel struct {
 func NewAppModel(dir, file string) *AppModel {
 	return &AppModel{
 		screen: ScreenFilePicker,
+		home:   ScreenFilePicker,
 		picker: NewFilePickerModel(dir, 120, 40),
 		file:   file,
 	}
 }
 
+// NewSearchApp opens on the search screen over doc's rows; the viewer returns there.
+func NewSearchApp(doc RowsFile) *AppModel {
+	return &AppModel{
+		screen: ScreenSearch,
+		home:   ScreenSearch,
+		search: NewSearchModel(doc, 120, 40),
+	}
+}
+
 func (m *AppModel) Init() tea.Cmd {
+	if m.home == ScreenSearch {
+		return m.search.Init()
+	}
 	if m.file == "" {
 		return nil
 	}
@@ -59,9 +76,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.picker != nil {
 			m.picker.SetSize(msg.Width, msg.Height)
 		}
-		if m.viewer != nil {
-			return m, m.viewer.Update(msg)
+		var cmds []tea.Cmd
+		if m.search != nil {
+			cmds = append(cmds, m.search.Update(msg)) // sizes the screen and restarts its spin
 		}
+		if m.viewer != nil {
+			cmds = append(cmds, m.viewer.Update(msg))
+		}
+		return m, tea.Batch(cmds...)
 	case MoleculeLoadedMsg:
 		m.viewer = NewViewerModel(m.width, m.height, msg.Mol, msg.Path)
 		m.screen = ScreenViewer
@@ -71,11 +93,22 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = ScreenError
 		return m, nil
 	case BackToPickerMsg:
-		m.screen = ScreenFilePicker
+		m.screen = m.home
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+	}
+
+	// The search screen's preview and spin ticks keep arriving while the viewer
+	// or the error screen is up; it must still see them or its spin never restarts.
+	var bg tea.Cmd
+	if m.search != nil && m.screen != ScreenSearch {
+		switch msg.(type) {
+		case tea.KeyMsg, tea.MouseMsg:
+		default:
+			bg = m.search.Update(msg)
 		}
 	}
 
@@ -96,19 +129,36 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.picker != nil {
 			return m, m.picker.Update(msg)
 		}
+	case ScreenSearch:
+		if keyMsg, ok := msg.(tea.KeyMsg); ok && !m.search.Filtering() {
+			switch keyMsg.String() {
+			case "q":
+				return m, tea.Quit
+			case "esc":
+				if m.search.FilterState() == list.Unfiltered {
+					return m, tea.Quit
+				}
+			case "enter":
+				if path := m.search.SelectedPath(); path != "" {
+					return m, loadMoleculeCmd(path)
+				}
+				return m, nil
+			}
+		}
+		return m, m.search.Update(msg)
 	case ScreenViewer:
 		if m.viewer != nil {
-			return m, m.viewer.Update(msg)
+			return m, tea.Batch(bg, m.viewer.Update(msg))
 		}
 	case ScreenError:
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			if keyMsg.String() == "q" || keyMsg.String() == "esc" {
-				m.screen = ScreenFilePicker
+				m.screen = m.home
 				return m, nil
 			}
 		}
 	}
-	return m, nil
+	return m, bg
 }
 
 func (m *AppModel) View() string {
@@ -123,6 +173,8 @@ func (m *AppModel) View() string {
 			return ui.ErrorStyle.Render("viewer unavailable")
 		}
 		return m.viewer.View()
+	case ScreenSearch:
+		return m.search.View()
 	case ScreenError:
 		lines := []string{
 			ui.ErrorStyle.Render("Failed to load molecule"),

@@ -15,7 +15,19 @@ const (
 	bondThreshold = 2.1
 )
 
+// ParseFile reads every frame of the PDB file at path.
 func ParseFile(path string) (*Molecule, error) {
+	return parse(path, false)
+}
+
+// ParseFirstFrame reads only the first frame of the PDB file at path. It
+// stops scanning at the first ENDMDL, or at a MODEL that would start a
+// second frame, so a large trajectory costs the time of one frame.
+func ParseFirstFrame(path string) (*Molecule, error) {
+	return parse(path, true)
+}
+
+func parse(path string, firstOnly bool) (*Molecule, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -33,6 +45,7 @@ func ParseFile(path string) (*Molecule, error) {
 	)
 
 	scanner := bufio.NewScanner(f)
+scan:
 	for scanner.Scan() {
 		line := scanner.Text()
 		if len(line) < 6 {
@@ -55,6 +68,9 @@ func ParseFile(path string) (*Molecule, error) {
 				currentAtoms = nil
 				currentBonds = nil
 				seenBondPairs = map[string]struct{}{}
+				if firstOnly {
+					break scan
+				}
 			}
 		case "ENDMDL":
 			if len(currentAtoms) > 0 {
@@ -66,6 +82,9 @@ func ParseFile(path string) (*Molecule, error) {
 			currentAtoms = nil
 			currentBonds = nil
 			seenBondPairs = map[string]struct{}{}
+			if firstOnly && len(frames) > 0 {
+				break scan
+			}
 		case "HELIX":
 			seg := parseHelix(line)
 			if seg.EndSeq >= seg.StartSeq {
