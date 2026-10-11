@@ -93,20 +93,20 @@ indexed 1,204 files under C:\runs: 1,180 new, 20 updated, 4 unchanged, 2 skipped
 On a terminal, `amide search` opens the search screen: the matching files on the left, the highlighted one drawn and slowly spinning on the right, its facts underneath.
 
 ```
-+-- amide search  frames:2.. ------------------------------------------------+
-| > 1ubq_                                   | +-------------------------------+ |
-|                                           | |                               | |
-|   1UBQ   1 frame    660 atoms  A          | |        (half-block pixel      | |
-| > -     500 frames  1204 atoms AB         | |         molecule, spinning    | |
-|   2LYZ   1 frame   1001 atoms  A          | |         slowly)               | |
-|   -      20 frames  3312 atoms ABCD       | |                               | |
-|                                           | +-------------------------------+ |
-|                                           | traj.pdb                          |
-|                                           | 500 frames  1,204 atoms  AB       |
-|                                           | 150 residues  42.1 x 38.7 x 55.2  |
-|                                           | 18.2 MB  C:\runs\prod\traj.pdb    |
-| type to filter  enter open  s sort: frames  r reverse  esc quit                |
-+----------------------------------------------------------------------------------+
++-- amide search  frames:2.. ------------------------------------------------------+
+|   PDB      FRAMES      ATOMS  CHAINS    | +-------------------------------------+ |
+|                                         | |                                     | |
+|   1UBQ          1        660  A         | |        (half-block pixel            | |
+| > -           500       1204  AB        | |         molecule, spinning          | |
+|   2LYZ          1       1001  A         | |         slowly)                     | |
+|   -            20       3312  ABCD      | |                                     | |
+|                                         | +-------------------------------------+ |
+|                                         | traj.pdb                                |
+|                                         | 500 frames  1,204 atoms  AB             |
+|                                         | 150 residues  42.1 x 38.7 x 55.2        |
+|                                         | 18.2 MB  C:\runs\prod\traj.pdb          |
+| type to filter  enter open  c copy path  s sort: frames  r reverse  esc quit      |
++-----------------------------------------------------------------------------------+
 ```
 
 Typing narrows the list on id, title and filename. `enter` opens the viewer on the highlighted file, and `q` in the viewer comes back to the list with the cursor where it was. See "Keys in search" below.
@@ -194,7 +194,8 @@ Viewer builds: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd
 | Filter | type |
 | Move | arrows, `j` `k` |
 | Open in the viewer | `enter` |
-| Cycle sort (path, id, frames, atoms) | `s` |
+| Copy the file path | `c` |
+| Cycle sort (path, id, frames, atoms, hydrogens, residues, size, modified) | `s` |
 | Reverse sort | `r` |
 | Quit | `esc`, `q` |
 

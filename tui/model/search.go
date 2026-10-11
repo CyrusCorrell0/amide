@@ -66,6 +66,7 @@ const (
 	previewDelay = 80 * time.Millisecond
 	spinEvery    = time.Second / 12
 	spinStep     = 0.03 // radians per spin tick
+	noticeFor    = 2 * time.Second
 	cacheSize    = 16
 	minListW     = 36
 	minPreviewW  = 60 // below this total width the preview pane is dropped
@@ -80,6 +81,19 @@ type previewLoadedMsg struct {
 }
 
 type spinTickMsg struct{}
+
+// copiedMsg reports whether the highlighted path reached the clipboard.
+type copiedMsg struct {
+	path string
+	err  error
+}
+
+type noticeClearMsg struct{}
+
+// rowFormat lays out one row and the column header above it: id, frames, atoms, chains.
+const rowFormat = "%-6s %8s %10s  %s"
+
+var columnHeader = fmt.Sprintf(rowFormat, "PDB", "FRAMES", "ATOMS", "CHAINS")
 
 type searchItem struct{ row Row }
 
@@ -102,8 +116,7 @@ func (rowDelegate) Spacing() int                        { return 0 }
 func (rowDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (rowDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	r := item.(searchItem).row
-	line := fmt.Sprintf("%-6s %11s %12s  %s", deref(r.ID, "-"), plural(r.Frames, "frame"),
-		plural(r.Atoms, "atom"), strings.Join(r.Chains, ""))
+	line := fmt.Sprintf(rowFormat, deref(r.ID, "-"), fmt.Sprint(r.Frames), fmt.Sprint(r.Atoms), strings.Join(r.Chains, ""))
 	style, cursor := lipgloss.NewStyle(), "  "
 	if index == m.Index() {
 		style, cursor = lipgloss.NewStyle().Foreground(lipgloss.Color(ui.ColorAccent)).Bold(true), "> "
@@ -136,20 +149,23 @@ type SearchModel struct {
 	keep          string // path to re-select once an async filter pass lands
 	width, height int
 	query         string
+	title         string
+	notice        string // replaces the status line briefly, after a copy
 }
 
 // NewSearchModel builds the screen over doc's rows, in the order given, with its query in the title.
 func NewSearchModel(doc RowsFile, width, height int) *SearchModel {
 	query := doc.Query
 	l := list.New(nil, rowDelegate{}, 1, 1)
-	l.Title = strings.TrimSpace("amide search  " + query)
-	l.Styles.Title = ui.HeaderStyle
+	l.SetShowTitle(false) // the screen draws its own title and column header
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.DisableQuitKeybindings()
-	l.SetStatusBarItemName("match", "matches")
 	l.FilterInput.Prompt = "filter: "
-	m := &SearchModel{list: l, rows: doc.Rows, reverse: doc.Reverse, query: query, cache: map[string]*pdb.Molecule{}}
+	m := &SearchModel{
+		list: l, rows: doc.Rows, reverse: doc.Reverse, query: query,
+		title: strings.TrimSpace("amide search  " + query), cache: map[string]*pdb.Molecule{},
+	}
 	for i, k := range sortKeys {
 		if k == doc.Sort {
 			m.sortKey = i
@@ -166,7 +182,7 @@ func (m *SearchModel) Init() tea.Cmd { return m.schedulePreview() }
 // SetSize lays the screen out for a terminal of width by height cells.
 func (m *SearchModel) SetSize(width, height int) {
 	m.width, m.height = max(1, width), max(1, height)
-	m.list.SetSize(m.listWidth(), max(1, m.height-1))
+	m.list.SetSize(m.listWidth(), max(1, m.height-3)) // title, header, status
 	if m.preview != nil {
 		m.preview.dirty = true
 	}
@@ -221,9 +237,24 @@ func (m *SearchModel) Update(msg tea.Msg) tea.Cmd {
 		m.preview.rotY += spinStep
 		m.preview.dirty = true
 		return tea.Tick(spinEvery, func(time.Time) tea.Msg { return spinTickMsg{} })
+	case copiedMsg:
+		m.notice = "copied " + msg.path
+		if msg.err != nil {
+			m.notice = "could not copy: " + msg.err.Error()
+		}
+		return tea.Tick(noticeFor, func(time.Time) tea.Msg { return noticeClearMsg{} })
+	case noticeClearMsg:
+		m.notice = ""
+		return nil
 	case tea.KeyMsg:
 		if !m.list.SettingFilter() {
 			switch msg.String() {
+			case "c":
+				path := m.SelectedPath()
+				if path == "" {
+					return nil
+				}
+				return func() tea.Msg { return copiedMsg{path: path, err: copyText(path)} }
 			case "s":
 				m.sortKey = (m.sortKey + 1) % len(sortKeys)
 				m.sorted = true
@@ -251,19 +282,34 @@ func (m *SearchModel) Update(msg tea.Msg) tea.Cmd {
 
 // View draws the list, the preview pane when there is room, and the status line.
 func (m *SearchModel) View() string {
-	var left string
+	left := m.headerView() + "\n" + ui.MutedStyle.Render("  "+columnHeader) + "\n"
 	if len(m.rows) == 0 {
-		left = ui.HeaderStyle.Render(m.list.Title) + "\n\n" + ui.MutedStyle.Render("  nothing indexed matches")
+		left += ui.MutedStyle.Render("  nothing indexed matches")
 	} else {
-		left = m.list.View()
+		left += m.list.View()
 	}
 	left = lipgloss.NewStyle().Width(m.listWidth()).Height(m.height - 1).Render(left)
 	top := left
 	if m.hasPreviewPane() {
 		top = lipgloss.JoinHorizontal(lipgloss.Top, left, m.paneView())
 	}
-	status := ui.MutedStyle.Render(fmt.Sprintf("type to filter  enter open  s sort: %s  r reverse  esc quit", sortKeys[m.sortKey]))
-	return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(top + "\n" + status)
+	status := m.notice
+	if status == "" {
+		status = fmt.Sprintf("type to filter  enter open  c copy path  s sort: %s  r reverse  esc quit", sortKeys[m.sortKey])
+	}
+	return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(top + "\n" + ui.MutedStyle.Render(status))
+}
+
+// headerView is the top line: the filter being typed, or the title and any applied filter.
+func (m *SearchModel) headerView() string {
+	if m.list.SettingFilter() {
+		return m.list.FilterInput.View()
+	}
+	title := ui.HeaderStyle.Render(m.title)
+	if m.list.FilterState() == list.FilterApplied {
+		title += ui.MutedStyle.Render("  filter: " + m.list.FilterValue())
+	}
+	return title
 }
 
 func (m *SearchModel) paneView() string {

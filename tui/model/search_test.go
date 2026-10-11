@@ -181,3 +181,38 @@ func TestEmptyRows(t *testing.T) {
 		t.Fatal("empty screen should say nothing matches")
 	}
 }
+
+func TestColumnHeaderNamesTheColumns(t *testing.T) {
+	m := NewSearchModel(RowsFile{Rows: testRows(t)}, 120, 30)
+	view := m.View()
+	for _, col := range []string{"PDB", "FRAMES", "ATOMS", "CHAINS"} {
+		if !strings.Contains(view, col) {
+			t.Fatalf("header lacks %s:\n%s", col, view)
+		}
+	}
+}
+
+func TestCCopiesTheHighlightedPath(t *testing.T) {
+	var got string
+	old := copyText
+	copyText = func(s string) error { got = s; return nil }
+	defer func() { copyText = old }()
+
+	m := NewSearchModel(RowsFile{Rows: testRows(t)}, 120, 30)
+	m.Update(key("j"))
+	cmd := m.Update(key("c"))
+	if cmd == nil {
+		t.Fatal("c should return a copy command")
+	}
+	m.Update(cmd())
+	if got != m.SelectedPath() {
+		t.Fatalf("copied %q, highlighted %q", got, m.SelectedPath())
+	}
+	if !strings.Contains(m.View(), "copied "+got) {
+		t.Fatal("status line should confirm the copy")
+	}
+	m.Update(noticeClearMsg{})
+	if !strings.Contains(m.View(), "c copy path") {
+		t.Fatal("status line should return to the key help")
+	}
+}

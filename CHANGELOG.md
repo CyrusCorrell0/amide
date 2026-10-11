@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - unreleased
+
+- The search screen names its columns (PDB, FRAMES, ATOMS, CHAINS) and `c` copies the highlighted file's path to the clipboard.
+
 ## 0.2.0 - 2026-10-11
 
 - `amide view` exits 4 instead of hanging when there is no interactive terminal or `CI` is set.
