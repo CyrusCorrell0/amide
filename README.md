@@ -13,7 +13,6 @@ Or `pip install amide`. Python 3.11 or newer. The wheel is pure Python with one 
 - License: GPL-3.0-or-later
 - Package: https://pypi.org/project/amide/
 - Source: https://github.com/CyrusCorrell0/amide
-- Site: https://amide.cyruscorrell.com/
 
 The first `view` downloads the viewer binary for your platform from the GitHub release `v0.2.0`, verifies its sha256 against `checksums.txt` from the same release, and caches it at `$XDG_CACHE_HOME/amide/tui/0.2.0/` (default `~/.cache/amide/tui/0.2.0/`). Later runs are instant. `amide view` with no path opens a file picker on the current directory.
 
