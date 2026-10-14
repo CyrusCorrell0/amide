@@ -21,7 +21,8 @@ type ViewerKeyMap struct {
 	CycleMode     key.Binding
 	ToggleH       key.Binding
 	ToggleSide    key.Binding
-	TogglePixel   key.Binding
+	CycleCanvas   key.Binding
+	Rock          key.Binding
 	ToggleCartoon key.Binding
 	Reset         key.Binding
 	Back          key.Binding
@@ -48,7 +49,8 @@ func DefaultViewerKeys() ViewerKeyMap {
 		CycleMode:     key.NewBinding(key.WithKeys("m")),
 		ToggleH:       key.NewBinding(key.WithKeys("e")),
 		ToggleSide:    key.NewBinding(key.WithKeys("tab")),
-		TogglePixel:   key.NewBinding(key.WithKeys("p")),
+		CycleCanvas:   key.NewBinding(key.WithKeys("p")),
+		Rock:          key.NewBinding(key.WithKeys("r")),
 		ToggleCartoon: key.NewBinding(key.WithKeys("c")),
 		Reset:         key.NewBinding(key.WithKeys("0")),
 		Back:          key.NewBinding(key.WithKeys("q", "esc")),

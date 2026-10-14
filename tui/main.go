@@ -7,7 +7,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/CyrusCorrell0/amide/tui/graphics"
 	"github.com/CyrusCorrell0/amide/tui/model"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -22,8 +24,12 @@ import (
 // It embeds *os.File so it still satisfies bubbletea's term.File check (Fd()). That
 // is required on Windows to enable virtual-terminal processing and to read the
 // terminal size; a plain io.Writer would break both.
+//
+// The overlay rides in the same brackets: the pixel tier's image escape goes out
+// after the frame's text, so the text never paints over it and both appear at once.
 type syncWriter struct {
 	*os.File
+	overlay *graphics.Overlay
 }
 
 const (
@@ -32,9 +38,11 @@ const (
 )
 
 func (w syncWriter) Write(p []byte) (int, error) {
-	buf := make([]byte, 0, len(p)+len(beginSync)+len(endSync))
+	img := w.overlay.Bytes()
+	buf := make([]byte, 0, len(p)+len(img)+len(beginSync)+len(endSync))
 	buf = append(buf, beginSync...)
 	buf = append(buf, p...)
+	buf = append(buf, img...)
 	buf = append(buf, endSync...)
 	if _, err := w.File.Write(buf); err != nil {
 		return 0, err
@@ -93,19 +101,30 @@ func main() {
 		fail(err)
 	}
 
-	app := model.NewAppModel(dir, file)
+	// Kitty and iTerm2 place images by cells; only sixel needs the cell size in
+	// pixels, and asking costs a round trip on stdin, so only sixel asks.
+	proto := graphics.Detect(os.Getenv)
+	cellW, cellH := 0, 0
+	if proto == graphics.Sixel {
+		if w, h, ok := graphics.ProbeCellSize(os.Stdin, os.Stdout, 300*time.Millisecond); ok {
+			cellW, cellH = w, h
+		}
+	}
+	session := graphics.NewSession(proto, cellW, cellH)
+
+	app := model.NewAppModel(dir, file, session)
 	if rows != "" {
 		doc, err := model.LoadRows(rows)
 		if err != nil {
 			fail(err)
 		}
-		app = model.NewSearchApp(doc)
+		app = model.NewSearchApp(doc, session)
 	}
 
 	p := tea.NewProgram(
 		app,
 		tea.WithAltScreen(),
-		tea.WithOutput(syncWriter{os.Stdout}),
+		tea.WithOutput(syncWriter{os.Stdout, session.Overlay}),
 	)
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("failed to run app: %v", err)

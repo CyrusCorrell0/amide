@@ -1,13 +1,10 @@
 package render
 
 import (
-	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
-
-const ShadingRamp = " .,:-=+*#%@"
 
 var CPKColors = map[string]lipgloss.Color{
 	"C":  lipgloss.Color("#909090"),
@@ -45,10 +42,4 @@ func VdWRadius(el string) float64 {
 		return r
 	}
 	return VdWRadii["C"]
-}
-
-func ShadeRune(lambert float64) rune {
-	lambert = math.Max(0, math.Min(1, lambert))
-	idx := int(math.Round(lambert * float64(len(ShadingRamp)-1)))
-	return rune(ShadingRamp[idx])
 }

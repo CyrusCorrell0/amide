@@ -9,13 +9,13 @@ amide view protein.pdb
 
 Or `pip install amide`. Python 3.11 or newer. The wheel is pure Python with one dependency (typer).
 
-- Version: 0.2.0
+- Version: 0.3.0
 - License: GPL-3.0-or-later
 - Package: https://pypi.org/project/amide/
 - Source: https://github.com/CyrusCorrell0/amide
 - Site: https://amide.cyruscorrell.com/
 
-The first `view` downloads the viewer binary for your platform from the GitHub release `v0.2.0`, verifies its sha256 against `checksums.txt` from the same release, and caches it at `$XDG_CACHE_HOME/amide/tui/0.2.0/` (default `~/.cache/amide/tui/0.2.0/`). Later runs are instant. `amide view` with no path opens a file picker on the current directory.
+The first `view` downloads the viewer binary for your platform from the GitHub release `v0.3.0`, verifies its sha256 against `checksums.txt` from the same release, and caches it at `$XDG_CACHE_HOME/amide/tui/0.3.0/` (default `~/.cache/amide/tui/0.3.0/`). Later runs are instant. `amide view` with no path opens a file picker on the current directory.
 
 ## Commands
 
@@ -27,7 +27,7 @@ The first `view` downloads the viewer binary for your platform from the GitHub r
 | `amide index [PATH] [--json]` | Finds every PDB file under PATH and adds it to the global index. PATH defaults to `.`. |
 | `amide search [FILTERS] [--sort KEY] [-r] [--json]` | Searches the index. Opens the search screen on a terminal. JSON when `--json` is passed or stdout is not a terminal. |
 | `amide doctor [--json]` | Checks everything `view` needs and prints the fix for each failure. Makes no network requests. |
-| `amide -v`, `amide --version` | Prints `amide 0.2.0`. |
+| `amide -v`, `amide --version` | Prints `amide 0.3.0`. |
 | `amide -h`, `amide --help` | Prints help with examples. Under 100 ms. |
 
 ### amide info
@@ -133,9 +133,9 @@ amide search: nothing indexed yet; run `amide index <directory>`
 
 ```
 $ amide doctor
-  ok    amide 0.2.0, python 3.12.4
+  ok    amide 0.3.0, python 3.12.4
   ok    platform windows/amd64 is supported
-  ok    viewer 0.2.0 cached at C:\Users\you\.cache\amide\tui\0.2.0\amide-tui.exe
+  ok    viewer 0.3.0 cached at C:\Users\you\.cache\amide\tui\0.3.0\amide-tui.exe
   ok    terminal is interactive (120x40)
 ```
 
@@ -163,6 +163,7 @@ A failing check prints `fail` and a second line starting `fix:`. Exit 0 when eve
 | `AMIDE_NO_ANIMATION` | Print the banner in one go, no flourish. |
 | `NO_COLOR` | Honoured. Also prints the banner in one go. |
 | `CI` | Prints the banner in one go, and makes `view` exit 4. |
+| `AMIDE_GRAPHICS` | `none`, `kitty`, `sixel` or `iterm2`. Overrides terminal detection for the pixels canvas. |
 
 ## Platforms
 
@@ -181,11 +182,28 @@ Viewer builds: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd
 | Cycle render mode (space fill, ball and stick, wireframe, cartoon) | `m` |
 | Show or hide hydrogens | `e` |
 | Toggle side panel | `tab` |
-| Toggle pixel rendering | `p` |
+| Cycle canvas: half block, quadrant, braille, sextant, pixels | `p` |
 | Toggle cartoon | `c` |
+| Rock the view | `r` |
 | Reset view | `0` |
 | Back to picker or search | `q`, `esc` |
 | Quit | `ctrl+c` |
+
+## Graphics
+
+`p` cycles the canvas from coarse to fine. Half block, quadrant, braille and sextant draw with text and work in any true-colour terminal. Sextant needs a font with Symbols for Legacy Computing, such as Cascadia Code. Pixels draws a real image and needs a terminal that speaks an image protocol; elsewhere `p` skips it.
+
+| Protocol | Terminals |
+|---|---|
+| kitty | kitty, WezTerm, Ghostty, Konsole |
+| iTerm2 | iTerm2 |
+| sixel | Windows Terminal 1.22 or later, VS Code 1.101 or later, foot, mlterm |
+
+Under tmux the viewer stays on text canvases.
+
+Over SSH only iTerm2 and kitty forward the variables the viewer reads. For the others, set `AMIDE_GRAPHICS` on the remote shell.
+
+Depth cues: far atoms fade, overlaps get a dark edge, near atoms are drawn larger.
 
 ## Keys in search
 

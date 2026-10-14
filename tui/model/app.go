@@ -3,6 +3,7 @@ package model
 import (
 	"strings"
 
+	"github.com/CyrusCorrell0/amide/tui/graphics"
 	"github.com/CyrusCorrell0/amide/tui/pdb"
 	"github.com/CyrusCorrell0/amide/tui/ui"
 	"github.com/charmbracelet/bubbles/list"
@@ -37,25 +38,29 @@ type AppModel struct {
 	viewer        *ViewerModel
 	lastErr       string
 	file          string
+	gfx           *graphics.Session // handed to every viewer
 }
 
 // NewAppModel roots the file picker at dir. When file is not empty the viewer
-// opens on it immediately and the picker stays one keypress away.
-func NewAppModel(dir, file string) *AppModel {
+// opens on it immediately and the picker stays one keypress away. gfx says how
+// the viewer may draw images; nil means text only.
+func NewAppModel(dir, file string, gfx *graphics.Session) *AppModel {
 	return &AppModel{
 		screen: ScreenFilePicker,
 		home:   ScreenFilePicker,
 		picker: NewFilePickerModel(dir, 120, 40),
 		file:   file,
+		gfx:    gfx,
 	}
 }
 
 // NewSearchApp opens on the search screen over doc's rows; the viewer returns there.
-func NewSearchApp(doc RowsFile) *AppModel {
+func NewSearchApp(doc RowsFile, gfx *graphics.Session) *AppModel {
 	return &AppModel{
 		screen: ScreenSearch,
 		home:   ScreenSearch,
 		search: NewSearchModel(doc, 120, 40),
+		gfx:    gfx,
 	}
 }
 
@@ -85,7 +90,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case MoleculeLoadedMsg:
-		m.viewer = NewViewerModel(m.width, m.height, msg.Mol, msg.Path)
+		m.viewer = NewViewerModel(m.width, m.height, msg.Mol, msg.Path, m.gfx)
 		m.screen = ScreenViewer
 		return m, nil
 	case MoleculeErrMsg:

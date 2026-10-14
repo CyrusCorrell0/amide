@@ -42,6 +42,8 @@ type RecordParams struct {
 	Cfg         SceneConfig
 	TermW       int // recording buffer width in terminal cells
 	TermH       int // recording buffer height in terminal cells
+	PerCellX    int // pixels per cell across; the GIF is TermW*PerCellX wide
+	PerCellY    int // pixels per cell down; the GIF is TermH*PerCellY tall
 	FPS         int // playback FPS, controls GIF frame delay
 	Background  color.RGBA
 }
@@ -70,16 +72,11 @@ func RecordTrajectoryGIF(path string, params RecordParams) error {
 		delay = 1
 	}
 
-	pbuf := NewPixelBuffer(params.TermW, params.TermH)
+	pbuf := NewPixelBuffer(params.TermW, params.TermH, params.PerCellX, params.PerCellY)
 	out := &gif.GIF{}
 
 	for i := 0; i < len(frames); i += stride {
-		frame := frames[i]
-		if params.ShowCartoon {
-			RenderCartoonPixel(pbuf, frame, params.Mol.SSSegments, params.Cfg)
-		} else {
-			RenderFramePixel(pbuf, frame, params.Mode, params.Cfg)
-		}
+		RenderScene(pbuf, frames[i], params.Mol.SSSegments, params.Mode, params.ShowCartoon, params.Cfg)
 
 		rgba := pbuf.ToImage(params.Background)
 		paletted := image.NewPaletted(rgba.Bounds(), palette.Plan9)

@@ -3,11 +3,12 @@ package model
 import (
 	"testing"
 
+	"github.com/CyrusCorrell0/amide/tui/graphics"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func searchApp() *AppModel {
-	return NewSearchApp(RowsFile{Query: "q", Sort: "path", Rows: []Row{{Path: "a.pdb", Frames: 1, Atoms: 3}}})
+	return NewSearchApp(RowsFile{Query: "q", Sort: "path", Rows: []Row{{Path: "a.pdb", Frames: 1, Atoms: 3}}}, graphics.NewSession(graphics.None, 0, 0))
 }
 
 func TestNewSearchAppStartsOnSearch(t *testing.T) {
@@ -36,7 +37,7 @@ func TestEscOnUnfilteredSearchQuits(t *testing.T) {
 }
 
 func TestNewAppModelStartsOnPicker(t *testing.T) {
-	if got := NewAppModel(t.TempDir(), "").screen; got != ScreenFilePicker {
+	if got := NewAppModel(t.TempDir(), "", graphics.NewSession(graphics.None, 0, 0)).screen; got != ScreenFilePicker {
 		t.Fatalf("screen = %v, want ScreenFilePicker", got)
 	}
 }

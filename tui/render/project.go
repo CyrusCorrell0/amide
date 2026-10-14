@@ -19,8 +19,22 @@ func RotateYX(v Vec3, rotY, rotX float64) Vec3 {
 	return Vec3{X: x1, Y: y2, Z: z2}
 }
 
-func Project(v Vec3, canvasW, canvasH int, zoom, panX, panY float64) (int, int) {
-	sx := float64(canvasW)/2.0 + (v.X * zoom) + panX
-	sy := float64(canvasH)/2.0 - (v.Y * zoom * 0.5) + panY
-	return int(math.Round(sx)), int(math.Round(sy))
+const (
+	// perspectiveMin and perspectiveMax bound the size factor so a point near or
+	// behind the camera cannot blow up or vanish.
+	perspectiveMin = 0.2
+	perspectiveMax = 5.0
+)
+
+// perspective is the size factor for a point at depth z (larger is nearer):
+// CameraDist / (CameraDist - z), clamped. CameraDist 0 is orthographic and gives 1.
+func perspective(cfg SceneConfig, z float64) float64 {
+	if cfg.CameraDist <= 0 {
+		return 1
+	}
+	d := cfg.CameraDist - z
+	if d <= 0 {
+		return perspectiveMax
+	}
+	return min(perspectiveMax, max(perspectiveMin, cfg.CameraDist/d))
 }

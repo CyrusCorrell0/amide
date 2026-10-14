@@ -30,6 +30,8 @@ func TestRecordTrajectoryGIFSmoke(t *testing.T) {
 		},
 		TermW:      80,
 		TermH:      40,
+		PerCellX:   1,
+		PerCellY:   2,
 		FPS:        10,
 		Background: color.RGBA{R: 0, G: 0, B: 0, A: 0xFF},
 	}

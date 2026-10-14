@@ -326,12 +326,12 @@ func (m *SearchModel) paneView() string {
 	innerW, innerH := max(1, w-4), max(1, m.height-1-4-2) // status, facts, border
 	if p != nil && p.mol != nil {
 		if p.pbuf == nil || p.pbuf.TermW != innerW || p.pbuf.TermH != innerH {
-			p.pbuf = render.NewPixelBuffer(innerW, innerH)
+			p.pbuf = render.NewPixelBuffer(innerW, innerH, 2, 2)
 			p.dirty = true
 		}
 		if p.dirty {
 			render.RenderFramePixel(p.pbuf, p.mol.Frames[0], autoModeFor(p.mol), m.scene(p, innerH+2))
-			p.drawn, p.dirty = p.pbuf.Render(), false
+			p.drawn, p.dirty = p.pbuf.RenderQuadrant(), false
 		}
 	}
 	drawn := ""

@@ -8,47 +8,54 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// PixelBuffer provides 2× vertical resolution by using Unicode half-block characters.
-// Each terminal cell represents two pixels: the top pixel sets the foreground colour
-// (rendered with ▀) and the bottom pixel sets the background colour.
+// PixelCell is one pixel of the scene: its colour, its depth (larger is nearer the
+// viewer) and whether anything has been drawn there this frame.
 type PixelCell struct {
 	R, G, B  uint8
 	Depth    float64
 	HasColor bool
 }
 
+// PixelBuffer is the scene rasterised at sub-cell resolution. Each terminal cell holds
+// a PerCellX by PerCellY block of pixels, so one buffer type serves every encoder:
+// half blocks read 1x2, quadrants 2x2, braille 2x4, and a graphics protocol whatever
+// the terminal's cell size is in real pixels.
 type PixelBuffer struct {
-	TermW   int // terminal columns
-	TermH   int // terminal rows
-	PWidth  int // pixel columns  = TermW
-	PHeight int // pixel rows     = TermH * 2
-	Pixels  []PixelCell
+	TermW, TermH       int         // terminal cells
+	PerCellX, PerCellY int         // pixels per cell
+	PWidth, PHeight    int         // TermW*PerCellX, TermH*PerCellY
+	Pixels             []PixelCell // row-major, index py*PWidth+px
 }
 
-func NewPixelBuffer(termW, termH int) *PixelBuffer {
-	if termW < 1 {
-		termW = 1
-	}
-	if termH < 1 {
-		termH = 1
-	}
+func NewPixelBuffer(termW, termH, perCellX, perCellY int) *PixelBuffer {
+	termW, termH = max(1, termW), max(1, termH)
+	perCellX, perCellY = max(1, perCellX), max(1, perCellY)
 	pb := &PixelBuffer{
-		TermW:   termW,
-		TermH:   termH,
-		PWidth:  termW,
-		PHeight: termH * 2,
+		TermW:    termW,
+		TermH:    termH,
+		PerCellX: perCellX,
+		PerCellY: perCellY,
+		PWidth:   termW * perCellX,
+		PHeight:  termH * perCellY,
 	}
 	pb.Pixels = make([]PixelCell, pb.PWidth*pb.PHeight)
 	pb.Clear()
 	return pb
 }
 
-func (pb *PixelBuffer) Resize(termW, termH int) {
-	if termW == pb.TermW && termH == pb.TermH {
+func (pb *PixelBuffer) Resize(termW, termH, perCellX, perCellY int) {
+	if termW == pb.TermW && termH == pb.TermH && perCellX == pb.PerCellX && perCellY == pb.PerCellY {
 		return
 	}
-	*pb = *NewPixelBuffer(termW, termH)
+	*pb = *NewPixelBuffer(termW, termH, perCellX, perCellY)
 }
+
+// ScaleX and ScaleY convert scene units to pixels. The scene is laid out in units
+// where one unit is one terminal column wide and half a terminal row tall (the
+// half-block grid), so zoom and atom size look the same on every grid; a finer grid
+// only adds detail.
+func (pb *PixelBuffer) ScaleX() float64 { return float64(pb.PerCellX) }
+func (pb *PixelBuffer) ScaleY() float64 { return float64(pb.PerCellY) / 2 }
 
 func (pb *PixelBuffer) Clear() {
 	for i := range pb.Pixels {
@@ -74,10 +81,12 @@ const (
 	pixelBgB uint8 = 0x00
 )
 
-// Render serialises the pixel buffer into ANSI true-colour half-block output.
-// FG+BG colour pairs are run-length compressed: a new escape is only emitted when
-// the pair changes, reducing output by ~10× over per-cell wrapping.
-func (pb *PixelBuffer) Render() string {
+// RenderHalfBlock serialises the pixel buffer into ANSI true-colour half-block output.
+// It assumes a 1x2 grid (PerCellX 1, PerCellY 2): the top pixel is the foreground of
+// ▀ and the bottom pixel the background. FG+BG colour pairs are run-length
+// compressed: a new escape is only emitted when the pair changes, reducing output by
+// ~10× over per-cell wrapping.
+func (pb *PixelBuffer) RenderHalfBlock() string {
 	var sb strings.Builder
 	sb.Grow((pb.TermW*5 + 1) * pb.TermH)
 
@@ -230,37 +239,59 @@ func drawLinePixel(pbuf *PixelBuffer, x0, y0 int, z0 float64, x1, y1 int, z1 flo
 	}
 }
 
-// drawDiskPixel rasterises a shaded sphere disk into the PixelBuffer.
+const (
+	// specularStrength is the peak highlight as a fraction of white.
+	specularStrength = 0.6
+	// specularPower is the Blinn-Phong exponent; higher gives a tighter highlight.
+	specularPower = 24
+)
+
+// shade lights one channel: diffuse c*lambert plus the specular add, clamped at 255.
+func shade(c uint8, lambert, spec float64) uint8 {
+	return uint8(min(255, float64(c)*lambert+spec))
+}
+
+// drawDiskPixel rasterises a shaded sphere into the PixelBuffer. radius is in scene
+// units; on grids whose pixels are not square in scene units the sphere becomes an
+// ellipse in pixels so it stays round on screen.
 func drawDiskPixel(pbuf *PixelBuffer, cx, cy int, depth float64, color lipgloss.Color, radius int) {
-	if radius < 1 {
-		radius = 1
-	}
+	radius = max(1, radius)
+	rx := max(1, int(math.Round(float64(radius)*pbuf.ScaleX())))
+	ry := max(1, int(math.Round(float64(radius)*pbuf.ScaleY())))
 	cr, cg, cb := LipglossToRGB(color)
 	light := Vec3{X: 0.4, Y: -0.6, Z: 0.7}
 	ll := math.Sqrt(light.X*light.X + light.Y*light.Y + light.Z*light.Z)
 	light.X /= ll
 	light.Y /= ll
 	light.Z /= ll
+	// Blinn-Phong half vector between the light and the viewer at (0, 0, 1).
+	half := Vec3{X: light.X, Y: light.Y, Z: light.Z + 1}
+	hl := math.Sqrt(half.X*half.X + half.Y*half.Y + half.Z*half.Z)
+	half.X /= hl
+	half.Y /= hl
+	half.Z /= hl
 
-	r2 := radius * radius
-	for dy := -radius; dy <= radius; dy++ {
-		for dx := -radius; dx <= radius; dx++ {
-			if dx*dx+dy*dy > r2 {
+	// Integer inside test: (dx/rx)^2 + (dy/ry)^2 <= 1 without rounding at the rim.
+	rx2, ry2 := rx*rx, ry*ry
+	for dy := -ry; dy <= ry; dy++ {
+		for dx := -rx; dx <= rx; dx++ {
+			if dx*dx*ry2+dy*dy*rx2 > rx2*ry2 {
 				continue
 			}
-			nx := float64(dx) / float64(radius)
-			ny := float64(dy) / float64(radius)
+			nx := float64(dx) / float64(rx)
+			ny := float64(dy) / float64(ry)
 			nz2 := 1.0 - nx*nx - ny*ny
 			if nz2 < 0 {
 				continue
 			}
 			nz := math.Sqrt(nz2)
 			lambert := maxFloat(0.15, nx*light.X+ny*light.Y+nz*light.Z)
+			spec := 255 * specularStrength * math.Pow(maxFloat(0, nx*half.X+ny*half.Y+nz*half.Z), specularPower)
 			z := depth + nz*0.35
 			pbuf.SetPixel(cx+dx, cy+dy, z,
-				uint8(float64(cr)*lambert),
-				uint8(float64(cg)*lambert),
-				uint8(float64(cb)*lambert),
+				shade(cr, lambert, spec),
+				shade(cg, lambert, spec),
+				shade(cb, lambert, spec),
 			)
 		}
 	}
@@ -273,16 +304,16 @@ type projectedAtomPx struct {
 	SX, SY int
 	Depth  float64
 	Color  lipgloss.Color
-	Radius int
+	Radius int // scene units; drawDiskPixel scales it per axis
 }
 
-// projectAtomsPixel projects atoms into PixelBuffer pixel coordinates.
-// Y projection uses factor 1.0 (not 0.5) because each pixel row ≈ half a terminal row,
-// giving the same apparent scale as the ASCII projection with its 0.5 correction.
-func projectAtomsPixel(atoms []pdb.Atom, pWidth, pHeight int, cfg SceneConfig) ([]projectedAtomPx, map[int]projectedAtomPx) {
+// projectAtomsPixel projects atoms into PixelBuffer pixel coordinates. Positions are
+// computed in scene units and scaled to the buffer's grid; PanY is in terminal rows,
+// which is two scene units.
+func projectAtomsPixel(atoms []pdb.Atom, pbuf *PixelBuffer, cfg SceneConfig) ([]projectedAtomPx, map[int]projectedAtomPx) {
 	out := make([]projectedAtomPx, 0, len(atoms))
 	bySerial := make(map[int]projectedAtomPx, len(atoms))
-	scale := maxFloat(0.5, cfg.Zoom*0.16) // 2× the ASCII 0.08 factor
+	scale := maxFloat(0.5, cfg.Zoom*0.16)
 
 	for i, a := range atoms {
 		if !cfg.ShowHydrogen && strings.EqualFold(a.Element, "H") {
@@ -294,10 +325,9 @@ func projectAtomsPixel(atoms []pdb.Atom, pWidth, pHeight int, cfg SceneConfig) (
 			Z: a.Z - cfg.CenterZ,
 		}, cfg.RotY, cfg.RotX)
 
-		px := float64(pWidth)/2.0 + rot.X*cfg.Zoom + cfg.PanX
-		py := float64(pHeight)/2.0 - rot.Y*cfg.Zoom + cfg.PanY*2
+		px, py := projectPixel(pbuf, rot, cfg)
 
-		radius := int(math.Round(VdWRadius(a.Element) * scale))
+		radius := int(math.Round(VdWRadius(a.Element) * scale * perspective(cfg, rot.Z)))
 		radius = max(2, min(radius, 12))
 
 		serial := a.Serial
@@ -306,8 +336,8 @@ func projectAtomsPixel(atoms []pdb.Atom, pWidth, pHeight int, cfg SceneConfig) (
 		}
 		p := projectedAtomPx{
 			Serial: serial,
-			SX:     int(math.Round(px)),
-			SY:     int(math.Round(py)),
+			SX:     px,
+			SY:     py,
 			Depth:  rot.Z,
 			Color:  ElementColor(a.Element),
 			Radius: radius,
@@ -316,6 +346,16 @@ func projectAtomsPixel(atoms []pdb.Atom, pWidth, pHeight int, cfg SceneConfig) (
 		bySerial[p.Serial] = p
 	}
 	return out, bySerial
+}
+
+// projectPixel maps a rotated scene point to the nearest pixel of pbuf, with the
+// perspective factor applied when cfg.CameraDist is set.
+func projectPixel(pbuf *PixelBuffer, rot Vec3, cfg SceneConfig) (int, int) {
+	sx, sy := pbuf.ScaleX(), pbuf.ScaleY()
+	s := perspective(cfg, rot.Z)
+	px := float64(pbuf.PWidth)/2.0 + rot.X*s*cfg.Zoom*sx + cfg.PanX*sx
+	py := float64(pbuf.PHeight)/2.0 - rot.Y*s*cfg.Zoom*sy + cfg.PanY*2*sy
+	return int(math.Round(px)), int(math.Round(py))
 }
 
 func renderWireframePixel(pbuf *PixelBuffer, bonds []pdb.Bond, bySerial map[int]projectedAtomPx) {
@@ -330,13 +370,13 @@ func renderWireframePixel(pbuf *PixelBuffer, bonds []pdb.Bond, bySerial map[int]
 	}
 }
 
-// RenderFramePixel renders one PDB frame into a PixelBuffer using half-block pixel art.
+// RenderFramePixel renders one PDB frame as atoms and bonds into a PixelBuffer.
 func RenderFramePixel(pbuf *PixelBuffer, frame pdb.Frame, mode RenderMode, cfg SceneConfig) {
 	pbuf.Clear()
 	if len(frame.Atoms) == 0 {
 		return
 	}
-	pts, bySerial := projectAtomsPixel(frame.Atoms, pbuf.PWidth, pbuf.PHeight, cfg)
+	pts, bySerial := projectAtomsPixel(frame.Atoms, pbuf, cfg)
 	switch mode {
 	case ModeWireframe:
 		renderWireframePixel(pbuf, frame.Bonds, bySerial)

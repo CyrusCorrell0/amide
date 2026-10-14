@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 - 2026-10-14
+
+- Quadrant, braille and sextant canvases in the viewer, and `p` cycles through them.
+- A pixels canvas over the kitty, sixel and iTerm2 image protocols. `AMIDE_GRAPHICS` overrides detection.
+- Depth cueing, outlines, perspective and specular highlights.
+- `r` rocks the view.
+- Recordings follow the current canvas resolution.
+
 ## 0.2.1 - 2026-10-11
 
 - The search screen names its columns (PDB, FRAMES, ATOMS, CHAINS) and `c` copies the highlighted file's path to the clipboard.
