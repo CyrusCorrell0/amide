@@ -2,6 +2,10 @@
 
 Molecular dynamics in your terminal: amide opens a PDB trajectory as a shaded pixel molecule you can rotate, play, and step through frame by frame.
 
+![A peptide drawn by amide: shaded carbon, nitrogen and oxygen spheres joined by bonds, near atoms larger and far atoms faded](https://raw.githubusercontent.com/CyrusCorrell0/amide/main/docs/viewer.png)
+
+The pixels canvas in ball and stick mode. Press `p` to cycle through four text canvases that work in any terminal, then this one. See "Graphics" below.
+
 ```
 uv tool install amide
 amide view protein.pdb
